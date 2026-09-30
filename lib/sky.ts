@@ -75,11 +75,24 @@ function isCatalogStar(
  * Catalog coordinates are precessed/nutated from J2000 (EQJ) to the equator
  * and equinox of the observation date (EQD) before the horizontal transform,
  * since Astronomy.Horizon expects of-date RA/Dec.
+ *
+ * @param refraction Passed through to Astronomy.Horizon. Defaults to 'normal'
+ *   (matches every other call site: rendering, star positions). Pass `null`
+ *   explicitly for the geometric (airless) altitude - astronomy-engine's
+ *   'normal' refraction model keeps extrapolating a bend well below the
+ *   horizon (confirmed: ~0.5deg at -18deg, ~0.4deg at -34deg), which isn't
+ *   physically meaningful there and throws off readouts of standard
+ *   geometric thresholds like astronomical twilight (sun center at -18deg),
+ *   which SearchAltitude itself computes without refraction. (Note: a
+ *   JS default parameter only kicks in for an omitted or `undefined`
+ *   argument, so the "no refraction" sentinel has to be `null`, not
+ *   `undefined`.)
  */
 export function computeAltAz(
   target: Astronomy.Body | CatalogStar,
   observer: Astronomy.Observer,
-  dateUtc: Date
+  dateUtc: Date,
+  refraction: string | null = 'normal'
 ): AltAz {
   const time = Astronomy.MakeTime(dateUtc);
 
@@ -107,11 +120,44 @@ export function computeAltAz(
     observer,
     raOfDate,
     decOfDate,
-    'normal'
+    refraction ?? undefined
   );
 
   return {
     altitudeDeg: horizontal.altitude,
     azimuthDeg: horizontal.azimuth,
   };
+}
+
+/**
+ * Local sidereal time in hours [0, 24).
+ *
+ * Astronomy.SiderealTime() returns Greenwich Apparent Sidereal Time (GAST),
+ * not local sidereal time - this adds the observer's longitude (east
+ * positive) to get LST.
+ */
+export function computeLocalSiderealTime(
+  observer: Astronomy.Observer,
+  dateUtc: Date
+): number {
+  const gast = Astronomy.SiderealTime(Astronomy.MakeTime(dateUtc));
+  return (((gast + observer.longitude / 15) % 24) + 24) % 24;
+}
+
+const MOON_PHASE_NAMES = [
+  'New Moon',
+  'Waxing Crescent',
+  'First Quarter',
+  'Waxing Gibbous',
+  'Full Moon',
+  'Waning Gibbous',
+  'Last Quarter',
+  'Waning Crescent',
+];
+
+/** Names the moon's phase from Astronomy.MoonPhase()'s angle (0=new, 180=full). */
+export function moonPhaseName(phaseAngleDeg: number): string {
+  const phase = ((phaseAngleDeg % 360) + 360) % 360;
+  const index = Math.round(phase / 45) % 8;
+  return MOON_PHASE_NAMES[index];
 }

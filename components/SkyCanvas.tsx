@@ -2,7 +2,6 @@
 
 import { useEffect, useRef } from 'react';
 import * as Astronomy from 'astronomy-engine';
-import { POLE_ISLAND, REFERENCE_MOMENT } from '@/lib/observer';
 import { computeAltAz, computeStarAltAz, type AltAz, type CatalogStarRecord } from '@/lib/sky';
 import { getSkyRadius, projectAltAz } from '@/lib/projection';
 
@@ -66,6 +65,12 @@ interface MilkyWayRing {
   vertices: AltAz[];
 }
 
+// Raw (unprojected, date-independent) Milky Way contour ring, loaded once.
+interface MilkyWayRawRing {
+  alpha: number;
+  points: [number, number][]; // [ra_deg, dec_deg]
+}
+
 const BACKGROUND_COLOR = '#02030a';
 const HORIZON_COLOR = 'rgba(255, 255, 255, 0.08)';
 const CARDINAL_COLOR = 'rgba(255, 255, 255, 0.35)';
@@ -117,6 +122,10 @@ const SUN_MIN_ALTITUDE_DEG = -1;
 const MOON_LIT_COLOR = '#f4f0e6';
 const MOON_DARK_COLOR = '#0a0a12';
 const MOON_RADIUS_PX = 6;
+
+const TARGET_FPS = 30;
+const RECOMPUTE_THROTTLE_MS = 1000 / TARGET_FPS;
+const RECOMPUTE_WARN_MS = 33;
 
 function magnitudeToRadiusPx(mag: number): number {
   return Math.max(0.4, 1.6 * Math.pow(2.512, (6.5 - mag) * 0.28));
@@ -181,8 +190,33 @@ function drawMoonPhase(
   ctx.restore();
 }
 
-export default function SkyCanvas() {
+interface SkyCanvasProps {
+  dateUtc: Date;
+  observer: Astronomy.Observer;
+}
+
+export default function SkyCanvas({ dateUtc, observer }: SkyCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+
+  // Latest controlled props, read by the rAF loop (not a recompute trigger by
+  // itself - a React re-render never forces a recompute).
+  const dateRef = useRef(dateUtc);
+  const observerRef = useRef(observer);
+  useEffect(() => {
+    dateRef.current = dateUtc;
+  }, [dateUtc]);
+  useEffect(() => {
+    observerRef.current = observer;
+  }, [observer]);
+
+  // Raw, date-independent source data, loaded once on mount.
+  const starsCatalogRef = useRef<CatalogStarRecord[] | null>(null);
+  const starByIdRef = useRef<Map<number, CatalogStarRecord> | null>(null);
+  const constellationPairsRef = useRef<[number, number][] | null>(null);
+  const constellationCountRef = useRef(0);
+  const milkyWayRawRingsRef = useRef<MilkyWayRawRing[] | null>(null);
+
+  // Rendered (projected-per-frame-ready) output of the most recent recompute.
   const starsRef = useRef<RenderStar[] | null>(null);
   const constellationSegmentsRef = useRef<ConstellationSegment[] | null>(null);
   const milkyWayRingsRef = useRef<MilkyWayRing[] | null>(null);
@@ -361,83 +395,57 @@ export default function SkyCanvas() {
       }
     }
 
-    async function load() {
-      const observer = new Astronomy.Observer(
-        POLE_ISLAND.latitude,
-        POLE_ISLAND.longitude,
-        POLE_ISLAND.elevationMeters
-      );
-      const dateUtc = new Date(REFERENCE_MOMENT);
-      const astroTime = Astronomy.MakeTime(dateUtc);
+    let hasLoggedInitialStats = false;
 
-      const [starsResponse, constellationsResponse, milkyWayResponse] = await Promise.all([
-        fetch('/data/stars.json'),
-        fetch('/data/constellations.json'),
-        fetch('/data/mw.json'),
-      ]);
-      const catalog: StarCatalogFile = await starsResponse.json();
-      const constellationsFile: ConstellationsFile = await constellationsResponse.json();
-      const milkyWayFile: MilkyWayFile = await milkyWayResponse.json();
-      if (cancelled) return;
+    function recompute(currentDateUtc: Date, currentObserver: Astronomy.Observer) {
+      const starsCatalog = starsCatalogRef.current;
+      const constellationPairs = constellationPairsRef.current;
+      const milkyWayRawRings = milkyWayRawRingsRef.current;
+      if (!starsCatalog || !constellationPairs || !milkyWayRawRings) return;
 
-      // Stars, plus an id -> altaz map so constellation lines can reuse the
-      // exact same computation instead of recomputing per shared endpoint.
+      const start = performance.now();
+      const astroTime = Astronomy.MakeTime(currentDateUtc);
+
       const starAltAzById = new Map<number, AltAz>();
-      starsRef.current = catalog.stars.map((star) => {
-        const altAz = computeStarAltAz(star, observer, dateUtc);
+      const starsRender: RenderStar[] = new Array(starsCatalog.length);
+      for (let i = 0; i < starsCatalog.length; i++) {
+        const star = starsCatalog[i];
+        const altAz = computeStarAltAz(star, currentObserver, currentDateUtc);
         starAltAzById.set(star.id, altAz);
-        return { altitudeDeg: altAz.altitudeDeg, azimuthDeg: altAz.azimuthDeg, mag: star.mag };
-      });
+        starsRender[i] = { altitudeDeg: altAz.altitudeDeg, azimuthDeg: altAz.azimuthDeg, mag: star.mag };
+      }
+      starsRef.current = starsRender;
 
-      const segments: ConstellationSegment[] = [];
-      for (const constellation of constellationsFile.constellations) {
-        for (const [idA, idB] of constellation.lines) {
-          const a = starAltAzById.get(idA);
-          const b = starAltAzById.get(idB);
-          if (!a || !b) continue;
-          segments.push({ a, b });
-        }
+      const segments: ConstellationSegment[] = new Array(constellationPairs.length);
+      for (let i = 0; i < constellationPairs.length; i++) {
+        const [idA, idB] = constellationPairs[i];
+        segments[i] = { a: starAltAzById.get(idA)!, b: starAltAzById.get(idB)! };
       }
       constellationSegmentsRef.current = segments;
-      const drawnSegments = segments.filter(
-        (s) => s.a.altitudeDeg >= 0 && s.b.altitudeDeg >= 0
-      ).length;
-      console.log(
-        `Constellations: ${constellationsFile.constellations.length}, segments loaded: ${segments.length}, segments above horizon: ${drawnSegments}`
-      );
 
       const milkyWayRings: MilkyWayRing[] = [];
-      milkyWayFile.features.forEach((feature, featureIndex) => {
-        const alpha = MILKY_WAY_ALPHAS[featureIndex] ?? MILKY_WAY_ALPHAS[MILKY_WAY_ALPHAS.length - 1];
-        for (const polygon of feature.geometry.coordinates) {
-          for (const ring of polygon) {
-            const altAzVertices = ring.map(([raDeg, decDeg]) =>
-              computeAltAz({ raHours: raDeg / 15, decDegrees: decDeg }, observer, dateUtc)
-            );
-            const belowHorizonCount = altAzVertices.filter((v) => v.altitudeDeg < 0).length;
-            if (belowHorizonCount / altAzVertices.length > MILKY_WAY_BELOW_HORIZON_SKIP_FRACTION) {
-              continue;
-            }
-            const clamped = altAzVertices.map((v) => ({
-              altitudeDeg: Math.max(0, v.altitudeDeg),
-              azimuthDeg: v.azimuthDeg,
-            }));
-            milkyWayRings.push({ alpha, vertices: clamped });
-          }
+      for (const rawRing of milkyWayRawRings) {
+        const altAzVertices = rawRing.points.map(([raDeg, decDeg]) =>
+          computeAltAz({ raHours: raDeg / 15, decDegrees: decDeg }, currentObserver, currentDateUtc)
+        );
+        const belowHorizonCount = altAzVertices.filter((v) => v.altitudeDeg < 0).length;
+        if (belowHorizonCount / altAzVertices.length > MILKY_WAY_BELOW_HORIZON_SKIP_FRACTION) {
+          continue;
         }
-      });
+        const clamped = altAzVertices.map((v) => ({
+          altitudeDeg: Math.max(0, v.altitudeDeg),
+          azimuthDeg: v.azimuthDeg,
+        }));
+        milkyWayRings.push({ alpha: rawRing.alpha, vertices: clamped });
+      }
       milkyWayRingsRef.current = milkyWayRings;
-      console.log(`Milky Way: ${milkyWayRings.length} contour rings rendered above horizon.`);
 
-      // Gated to the same naked-eye magnitude limit as the star catalog
-      // (mag <= 6.5), so e.g. Neptune (mag ~7.8, never naked-eye) doesn't
-      // render even when it's geometrically above the horizon. Uranus (mag
-      // ~5.8, borderline naked-eye) stays under this cutoff.
       const planets: RenderPlanet[] = [];
+      const planetLogLines: string[] = [];
       for (const body of PLANET_BODIES) {
-        const altAz = computeAltAz(body, observer, dateUtc);
+        const altAz = computeAltAz(body, currentObserver, currentDateUtc);
         const mag = Astronomy.Illumination(body, astroTime).mag;
-        console.log(`${body}: altitude ${altAz.altitudeDeg.toFixed(2)} deg, mag ${mag.toFixed(2)}`);
+        planetLogLines.push(`${body}: altitude ${altAz.altitudeDeg.toFixed(2)} deg, mag ${mag.toFixed(2)}`);
         if (altAz.altitudeDeg < 0 || mag > PLANET_MAGNITUDE_LIMIT) continue;
         planets.push({
           name: body,
@@ -449,10 +457,9 @@ export default function SkyCanvas() {
       }
       planetsRef.current = planets;
 
-      sunRef.current = computeAltAz(Astronomy.Body.Sun, observer, dateUtc);
-      console.log(`Sun: altitude ${sunRef.current.altitudeDeg.toFixed(2)} deg`);
+      sunRef.current = computeAltAz(Astronomy.Body.Sun, currentObserver, currentDateUtc);
 
-      const moonAltAz = computeAltAz(Astronomy.Body.Moon, observer, dateUtc);
+      const moonAltAz = computeAltAz(Astronomy.Body.Moon, currentObserver, currentDateUtc);
       const moonIllumination = Astronomy.Illumination(Astronomy.Body.Moon, astroTime);
       const moonPhaseAngle = Astronomy.MoonPhase(astroTime);
       moonRef.current = {
@@ -461,20 +468,114 @@ export default function SkyCanvas() {
         illumFraction: moonIllumination.phase_fraction,
         phaseAngleDeg: moonPhaseAngle,
       };
-      console.log(
-        `Moon: altitude ${moonAltAz.altitudeDeg.toFixed(2)} deg, illuminated ${(
-          moonIllumination.phase_fraction * 100
-        ).toFixed(1)}%, phase angle ${moonPhaseAngle.toFixed(1)} deg`
-      );
+
+      const elapsed = performance.now() - start;
+      if (elapsed > RECOMPUTE_WARN_MS) {
+        console.warn(
+          `Sky recompute took ${elapsed.toFixed(1)}ms (budget ${RECOMPUTE_WARN_MS}ms for ${TARGET_FPS}fps) - may need a Web Worker (see prompt 6).`
+        );
+      }
+
+      if (!hasLoggedInitialStats) {
+        console.log(
+          `Constellations: ${constellationCountRef.current}, segments loaded: ${segments.length}, segments above horizon: ${
+            segments.filter((s) => s.a.altitudeDeg >= 0 && s.b.altitudeDeg >= 0).length
+          }`
+        );
+        console.log(`Milky Way: ${milkyWayRings.length} contour rings rendered above horizon.`);
+        for (const line of planetLogLines) console.log(line);
+        console.log(`Sun: altitude ${sunRef.current.altitudeDeg.toFixed(2)} deg`);
+        console.log(
+          `Moon: altitude ${moonAltAz.altitudeDeg.toFixed(2)} deg, illuminated ${(
+            moonIllumination.phase_fraction * 100
+          ).toFixed(1)}%, phase angle ${moonPhaseAngle.toFixed(1)} deg`
+        );
+        hasLoggedInitialStats = true;
+      }
 
       draw();
     }
 
-    load();
-    window.addEventListener('resize', draw);
+    async function loadRawData() {
+      const [starsResponse, constellationsResponse, milkyWayResponse] = await Promise.all([
+        fetch('/data/stars.json'),
+        fetch('/data/constellations.json'),
+        fetch('/data/mw.json'),
+      ]);
+      const catalog: StarCatalogFile = await starsResponse.json();
+      const constellationsFile: ConstellationsFile = await constellationsResponse.json();
+      const milkyWayFile: MilkyWayFile = await milkyWayResponse.json();
+      if (cancelled) return;
+
+      starsCatalogRef.current = catalog.stars;
+      const starById = new Map<number, CatalogStarRecord>();
+      for (const star of catalog.stars) starById.set(star.id, star);
+      starByIdRef.current = starById;
+
+      const constellationPairs: [number, number][] = [];
+      for (const constellation of constellationsFile.constellations) {
+        for (const [idA, idB] of constellation.lines) {
+          if (starById.has(idA) && starById.has(idB)) {
+            constellationPairs.push([idA, idB]);
+          }
+        }
+      }
+      constellationPairsRef.current = constellationPairs;
+      constellationCountRef.current = constellationsFile.constellations.length;
+
+      const milkyWayRawRings: MilkyWayRawRing[] = [];
+      milkyWayFile.features.forEach((feature, featureIndex) => {
+        const alpha =
+          MILKY_WAY_ALPHAS[featureIndex] ?? MILKY_WAY_ALPHAS[MILKY_WAY_ALPHAS.length - 1];
+        for (const polygon of feature.geometry.coordinates) {
+          for (const ring of polygon) {
+            milkyWayRawRings.push({
+              alpha,
+              points: ring.map(([raDeg, decDeg]) => [raDeg, decDeg]),
+            });
+          }
+        }
+      });
+      milkyWayRawRingsRef.current = milkyWayRawRings;
+
+      // First paint, immediately (not throttle-delayed).
+      recompute(dateRef.current, observerRef.current);
+    }
+
+    let rafId = 0;
+    let lastComputeAtMs: number | null = null;
+    let lastComputedDateMs: number | null = null;
+
+    function tick() {
+      rafId = requestAnimationFrame(tick);
+
+      if (!starsCatalogRef.current) return; // raw data not loaded yet
+
+      const currentDate = dateRef.current;
+      const currentDateMs = currentDate.getTime();
+      if (currentDateMs === lastComputedDateMs) return; // nothing changed - do nothing
+
+      const now = performance.now();
+      if (lastComputeAtMs !== null && now - lastComputeAtMs < RECOMPUTE_THROTTLE_MS) return;
+
+      lastComputeAtMs = now;
+      lastComputedDateMs = currentDateMs;
+      recompute(currentDate, observerRef.current);
+    }
+
+    function handleResize() {
+      // Reproject with whatever was last computed; never recompute astronomy
+      // just because the window resized.
+      draw();
+    }
+
+    loadRawData();
+    rafId = requestAnimationFrame(tick);
+    window.addEventListener('resize', handleResize);
     return () => {
       cancelled = true;
-      window.removeEventListener('resize', draw);
+      cancelAnimationFrame(rafId);
+      window.removeEventListener('resize', handleResize);
     };
   }, []);
 

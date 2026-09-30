@@ -1,5 +1,5 @@
-import SkyCanvas from '@/components/SkyCanvas';
+import SkyExperience from '@/components/SkyExperience';
 
 export default function Home() {
-  return <SkyCanvas />;
+  return <SkyExperience />;
 }

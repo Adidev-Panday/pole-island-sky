@@ -1,6 +1,6 @@
 import * as Astronomy from 'astronomy-engine';
 import { POLE_ISLAND, REFERENCE_MOMENT } from '@/lib/observer';
-import { computeAltAz } from '@/lib/sky';
+import { computeAltAz, computeLocalSiderealTime } from '@/lib/sky';
 
 // Polaris, J2000: RA 02h 31m 49.09s, Dec +89 15' 50.8"
 const POLARIS = {
@@ -25,10 +25,8 @@ export default function Home() {
   const saturn = computeAltAz(Astronomy.Body.Saturn, observer, dateUtc);
   const venus = computeAltAz(Astronomy.Body.Venus, observer, dateUtc);
   const mars = computeAltAz(Astronomy.Body.Mars, observer, dateUtc);
-  // SiderealTime() returns Greenwich Apparent Sidereal Time (GAST), not local
-  // sidereal time. LST = GAST + longitude/15h (east positive), mod 24.
   const gast = Astronomy.SiderealTime(time);
-  const lst = (((gast + POLE_ISLAND.longitude / 15) % 24) + 24) % 24;
+  const lst = computeLocalSiderealTime(observer, dateUtc);
 
   const rows: Array<{ label: string; altitudeDeg: number; azimuthDeg: number; extra?: string }> = [
     { label: 'Polaris', ...polaris },
