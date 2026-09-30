@@ -5,10 +5,11 @@ Bay, Maine, in *Searching for Stars on an Island in Maine* (2018).
 
 ## Status
 
-This is prompt 3 of a planned 7: constellation figures, the Milky Way band,
-planets, Sun, and Moon added on top of the fixed star field. Everything
-still renders once at a fixed `REFERENCE_MOMENT` — time controls, star
-colors, atmospheric extinction/twilight, and any interactivity come later.
+This is prompt 4 of a planned 7: the observation instant is now interactive
+— a scrubber, date picker, presets (The Moment / Now / Sunset /
+Astronomical dark / Astronomical dawn), step buttons, and a shareable
+`?t=<ISO>` URL. Location is still fixed at `POLE_ISLAND`; star colors,
+atmospheric extinction/twilight, and boat orientation come later.
 
 ## Stack
 
@@ -49,9 +50,13 @@ npm run build:data   # runs build:stars, build:constellations, build:milkyway in
   placeholder date/time for the night described in the book — not stated in
   the book itself)
 - `lib/sky.ts` — `computeAltAz` (astronomy-engine `Body` or J2000
-  `{ raHours, decDegrees }` &rarr; topocentric alt/az), `applyProperMotion`
-  and `computeStarAltAz` for catalog stars (advances J2000 RA/Dec by proper
-  motion before the alt/az transform)
+  `{ raHours, decDegrees }` &rarr; topocentric alt/az, optional refraction
+  override), `applyProperMotion` and `computeStarAltAz` for catalog stars,
+  `computeLocalSiderealTime`, `moonPhaseName`
+- `lib/time.ts` — dependency-free `America/New_York` local-time helpers
+  (`formatLocalDate`, `formatLocalTime`, `formatZoneAbbreviation`,
+  `localMidnightUtc`), used by `TimeControls` for display and for the
+  Sunset/Astronomical dark/dawn presets' day-boundary searches
 - `lib/projection.ts` — zenith-centered stereographic projection (alt/az
   &rarr; canvas pixels), unit-tested in `lib/projection.test.ts`
 - `scripts/lib/cache.ts` — shared download/cache helper used by all three
@@ -68,8 +73,17 @@ npm run build:data   # runs build:stars, build:constellations, build:milkyway in
   copies it verbatim to `public/data/mw.json`
 - `components/SkyCanvas.tsx` — full-viewport, DPR-aware canvas: Milky Way,
   constellation lines, stars, planets, Sun, Moon (with phase), horizon
-  circle + cardinal labels, in that draw order, all at `REFERENCE_MOMENT`
-- `app/page.tsx` — renders `<SkyCanvas />`
+  circle + cardinal labels, in that draw order. Controlled (`dateUtc` +
+  `observer` props); astronomy recompute + redraw run in a
+  `requestAnimationFrame` loop reading a ref, throttled to 30/sec, so a
+  React re-render never forces a recompute (raw catalog data loads once on
+  mount and is reused)
+- `components/TimeControls.tsx` — scrubber, date picker, presets, step
+  buttons, copy-link, and the top-left info readout
+- `components/SkyExperience.tsx` — owns the `dateUtc` state, wires
+  `SkyCanvas` + `TimeControls` together, and syncs `?t=<ISO>` in the URL
+  (`history.replaceState`, read back on mount)
+- `app/page.tsx` — renders `<SkyExperience />`
 - `app/verify/page.tsx` — the prompt-1 verification table (Polaris, Sun,
   Moon, planets, local sidereal time), kept as an accuracy record, with
   cross-checks and known prompt/reality mismatches noted in a comment
