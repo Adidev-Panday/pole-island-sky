@@ -26,3 +26,9 @@ export const STAR_LABEL_MIN_ALTITUDE_DEG = 5;
 
 /** Fraction of a constellation's line segments that must be above horizon to label it. */
 export const CONSTELLATION_LABEL_MIN_VISIBLE_FRACTION = 0.5;
+
+/** Above this zoom level, every named star in view gets a label, not just LABELED_STAR_NAMES. */
+export const ZOOM_ALL_NAMED_STARS_THRESHOLD = 3;
+
+/** Above this zoom level, unnamed stars with a Bayer designation get a label too. */
+export const ZOOM_BAYER_LABELS_THRESHOLD = 8;

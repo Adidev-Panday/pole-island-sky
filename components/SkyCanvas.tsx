@@ -7,16 +7,23 @@ import {
   getSkyRadius,
   projectAltAz,
   projectAltAzUnclamped,
+  zoomAroundPoint,
+  ZOOM_MIN,
+  ZOOM_MAX,
+  type PanOffset,
   type ProjectedPoint,
 } from '@/lib/projection';
 import {
   LABELED_STAR_NAMES,
   STAR_LABEL_MIN_ALTITUDE_DEG,
   CONSTELLATION_LABEL_MIN_VISIBLE_FRACTION,
+  ZOOM_ALL_NAMED_STARS_THRESHOLD,
+  ZOOM_BAYER_LABELS_THRESHOLD,
 } from '@/lib/labels';
 import { bvToRgb, rgbToCss, type RGB } from '@/lib/starColor';
 import { effectiveMagnitude, horizonFadeFactor } from '@/lib/extinction';
 import { twilightGradientForAltitude, horizonGlowAlpha, horizonGlowColor } from '@/lib/twilight';
+import { bayerShortLabel, starDisplayName } from '@/lib/starDisplay';
 
 interface StarCatalogFile {
   epoch: number;
@@ -45,6 +52,7 @@ interface MilkyWayFile {
 }
 
 interface RenderStar {
+  id: number;
   altitudeDeg: number;
   azimuthDeg: number;
   effectiveMag: number;
@@ -135,6 +143,25 @@ const STAR_LABEL_COLOR = 'rgba(232, 236, 245, 0.55)';
 const STAR_LABEL_OFFSET_PX = 8; // NE of the star point (right + up)
 const CONSTELLATION_LABEL_COLOR = 'rgba(180, 200, 240, 0.35)';
 
+const SELECTED_STAR_RING_COLOR_RGB = '180, 220, 255';
+const SELECTED_STAR_RING_WIDTH_PX = 2;
+const SELECTED_STAR_RING_EXTRA_RADIUS_PX = 6;
+const SELECTED_STAR_RING_PULSE_PERIOD_MS = 2000;
+const SELECTED_STAR_RING_ALPHA_MIN = 0.5;
+const SELECTED_STAR_RING_ALPHA_MAX = 0.9;
+const SELECTED_STAR_LABEL_FONT = '13px sans-serif';
+const SELECTED_STAR_LABEL_COLOR = '#ffffff';
+
+// Sub-linear so stars grow with zoom without dominating the frame at 20x.
+function starZoomSizeFactor(zoom: number): number {
+  return 0.5 + 0.5 * Math.sqrt(zoom);
+}
+
+const HIT_TEST_RADIUS_PX = 12;
+const CLICK_DRAG_THRESHOLD_PX = 4;
+const WHEEL_ZOOM_SENSITIVITY = 0.0022; // exponential factor per pixel of wheel delta
+const DOUBLE_CLICK_ZOOM_FACTOR = 2;
+
 const SCENE_POINTER_LINE_COLOR = 'rgba(232, 236, 245, 0.6)';
 const SCENE_POINTER_LABEL_COLOR = 'rgba(232, 236, 245, 0.9)';
 const SCENE_POINTER_LINE_LENGTH_PX = 26;
@@ -205,13 +232,15 @@ function magnitudeToAlpha(mag: number): number {
 function projectCentroid(
   altAzPoints: AltAz[],
   canvasSize: { width: number; height: number },
-  rotationDeg: number
+  rotationDeg: number,
+  zoom: number,
+  pan: PanOffset
 ): ProjectedPoint | null {
   let sumX = 0;
   let sumY = 0;
   let count = 0;
   for (const altAz of altAzPoints) {
-    const point = projectAltAz(altAz, canvasSize, rotationDeg);
+    const point = projectAltAz(altAz, canvasSize, rotationDeg, zoom, pan);
     if (!point) continue;
     sumX += point.x;
     sumY += point.y;
@@ -221,11 +250,19 @@ function projectCentroid(
   return { x: sumX / count, y: sumY / count };
 }
 
-/** Projected radius (px from center) at a given altitude, ignoring azimuth/rotation. */
-function radiusForAltitude(altitudeDeg: number, canvasSize: { width: number; height: number }): number {
+/**
+ * Projected radius (px from center) at a given altitude, ignoring
+ * azimuth/rotation. Pan is a pure translation and doesn't affect a radius,
+ * so only zoom (a scale) is applied to the result.
+ */
+function radiusForAltitude(
+  altitudeDeg: number,
+  canvasSize: { width: number; height: number },
+  zoom: number
+): number {
   const point = projectAltAz({ altitudeDeg, azimuthDeg: 0 }, canvasSize, 0);
-  if (!point) return getSkyRadius(canvasSize);
-  return Math.hypot(point.x - canvasSize.width / 2, point.y - canvasSize.height / 2);
+  const raw = point ? Math.hypot(point.x - canvasSize.width / 2, point.y - canvasSize.height / 2) : getSkyRadius(canvasSize);
+  return raw * zoom;
 }
 
 /**
@@ -238,14 +275,19 @@ function drawTwilightGradient(
   ctx: CanvasRenderingContext2D,
   sun: AltAz,
   canvasSize: { width: number; height: number },
-  rotationDeg: number
+  rotationDeg: number,
+  zoom: number,
+  pan: PanOffset
 ) {
   const stops = twilightGradientForAltitude(sun.altitudeDeg);
   if (stops) {
     // Below-horizon sun still needs a real off-canvas anchor so the glow
     // emanates from the correct compass direction while scrubbing through dusk.
-    const center = projectAltAzUnclamped(sun, canvasSize, rotationDeg);
-    const outerRadius = Math.hypot(canvasSize.width, canvasSize.height);
+    const center = projectAltAzUnclamped(sun, canvasSize, rotationDeg, zoom, pan);
+    // Zoomed in, the screen can extend well past the raw canvas diagonal
+    // (pan can push the projection origin off-canvas too), so the gradient
+    // radius needs the same zoom scale to still reach every corner.
+    const outerRadius = Math.hypot(canvasSize.width, canvasSize.height) * Math.max(1, zoom);
     const gradient = ctx.createRadialGradient(
       center.x,
       center.y,
@@ -262,17 +304,16 @@ function drawTwilightGradient(
 
   const glowAlpha = horizonGlowAlpha(sun.altitudeDeg);
   if (glowAlpha > 0.001) {
-    const centerX = canvasSize.width / 2;
-    const centerY = canvasSize.height / 2;
-    const horizonR = getSkyRadius(canvasSize);
-    const innerR = radiusForAltitude(15, canvasSize);
+    const zenith = projectAltAz({ altitudeDeg: 90, azimuthDeg: 0 }, canvasSize, rotationDeg, zoom, pan)!;
+    const horizonR = getSkyRadius(canvasSize) * zoom;
+    const innerR = radiusForAltitude(15, canvasSize, zoom);
     const color = horizonGlowColor();
-    const glowGradient = ctx.createRadialGradient(centerX, centerY, innerR, centerX, centerY, horizonR);
+    const glowGradient = ctx.createRadialGradient(zenith.x, zenith.y, innerR, zenith.x, zenith.y, horizonR);
     glowGradient.addColorStop(0, rgbToCss(color, 0));
     glowGradient.addColorStop(1, rgbToCss(color, glowAlpha));
     ctx.fillStyle = glowGradient;
     ctx.beginPath();
-    ctx.arc(centerX, centerY, horizonR, 0, Math.PI * 2);
+    ctx.arc(zenith.x, zenith.y, horizonR, 0, Math.PI * 2);
     ctx.fill();
   }
 }
@@ -339,6 +380,11 @@ interface SkyCanvasProps {
   labelsEnabled: boolean;
   scenePointerOpacity: number;
   statsEnabled?: boolean;
+  zoom: number;
+  pan: PanOffset;
+  onZoomPanChange: (zoom: number, pan: PanOffset) => void;
+  selectedStarId: number | null;
+  onSelectStar: (star: CatalogStarRecord | null) => void;
 }
 
 export default function SkyCanvas({
@@ -348,6 +394,11 @@ export default function SkyCanvas({
   labelsEnabled,
   scenePointerOpacity,
   statsEnabled = false,
+  zoom,
+  pan,
+  onZoomPanChange,
+  selectedStarId,
+  onSelectStar,
 }: SkyCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const [stats, setStats] = useState<RenderStats | null>(null);
@@ -359,6 +410,11 @@ export default function SkyCanvas({
   const rotationRef = useRef(rotationDeg);
   const labelsEnabledRef = useRef(labelsEnabled);
   const scenePointerOpacityRef = useRef(scenePointerOpacity);
+  const zoomRef = useRef(zoom);
+  const panRef = useRef(pan);
+  const onZoomPanChangeRef = useRef(onZoomPanChange);
+  const selectedStarIdRef = useRef(selectedStarId);
+  const onSelectStarRef = useRef(onSelectStar);
   useEffect(() => {
     dateRef.current = dateUtc;
   }, [dateUtc]);
@@ -374,6 +430,21 @@ export default function SkyCanvas({
   useEffect(() => {
     scenePointerOpacityRef.current = scenePointerOpacity;
   }, [scenePointerOpacity]);
+  useEffect(() => {
+    zoomRef.current = zoom;
+  }, [zoom]);
+  useEffect(() => {
+    panRef.current = pan;
+  }, [pan]);
+  useEffect(() => {
+    onZoomPanChangeRef.current = onZoomPanChange;
+  }, [onZoomPanChange]);
+  useEffect(() => {
+    selectedStarIdRef.current = selectedStarId;
+  }, [selectedStarId]);
+  useEffect(() => {
+    onSelectStarRef.current = onSelectStar;
+  }, [onSelectStar]);
 
   // Raw, date-independent source data, loaded once on mount.
   const starsCatalogRef = useRef<CatalogStarRecord[] | null>(null);
@@ -385,12 +456,15 @@ export default function SkyCanvas({
 
   // Rendered (projected-per-frame-ready) output of the most recent recompute.
   const starsRef = useRef<RenderStar[] | null>(null);
+  const starsRenderByIdRef = useRef<Map<number, RenderStar> | null>(null);
   const constellationSegmentsRef = useRef<ConstellationSegment[] | null>(null);
   const milkyWayRingsRef = useRef<MilkyWayRing[] | null>(null);
   const planetsRef = useRef<RenderPlanet[] | null>(null);
   const sunRef = useRef<AltAz | null>(null);
   const moonRef = useRef<RenderMoon | null>(null);
-  const labeledStarsRef = useRef<LabeledStar[] | null>(null);
+  const labeledStarsRef = useRef<LabeledStar[] | null>(null); // curated 14, zoom <= 3
+  const allNamedStarsRef = useRef<LabeledStar[] | null>(null); // every proper-named star, zoom > 3
+  const bayerLabeledStarsRef = useRef<LabeledStar[] | null>(null); // unnamed but Bayer'd, zoom > 8
   const constellationLabelsRef = useRef<ConstellationLabel[] | null>(null);
   const scenePointerTargetsRef = useRef<ScenePointerTarget[] | null>(null);
   const aboveHorizonStarCountRef = useRef(0);
@@ -439,6 +513,8 @@ export default function SkyCanvas({
       }
 
       const rotation = rotationRef.current;
+      const zoom = zoomRef.current;
+      const pan = panRef.current;
 
       const dpr = window.devicePixelRatio || 1;
       const width = window.innerWidth;
@@ -460,14 +536,14 @@ export default function SkyCanvas({
       ctx.fillRect(0, 0, width, height);
 
       // 1b. Twilight gradient (dawn/dusk), painted before any sky content
-      drawTwilightGradient(ctx, sun, canvasSize, rotation);
+      drawTwilightGradient(ctx, sun, canvasSize, rotation, zoom, pan);
 
       // 2. Milky Way (additive so overlapping bands brighten toward the core)
       ctx.globalCompositeOperation = 'lighter';
       for (const ring of milkyWayRings) {
         ctx.beginPath();
         ring.vertices.forEach((altAz, i) => {
-          const point = projectAltAz(altAz, canvasSize, rotation);
+          const point = projectAltAz(altAz, canvasSize, rotation, zoom, pan);
           if (!point) return; // shouldn't happen; vertices are pre-clamped >= 0
           if (i === 0) ctx.moveTo(point.x, point.y);
           else ctx.lineTo(point.x, point.y);
@@ -478,8 +554,8 @@ export default function SkyCanvas({
       }
 
       // 2b. Soft blurred glow for the 2 brightest bands, cached per
-      // {recompute generation, canvas size, rotation}.
-      const glowKey = `${recomputeGenerationRef.current}:${width}x${height}:${rotation}`;
+      // {recompute generation, canvas size, rotation, zoom, pan}.
+      const glowKey = `${recomputeGenerationRef.current}:${width}x${height}:${rotation}:${zoom}:${pan.x},${pan.y}`;
       let glowCanvas =
         milkyWayGlowCacheRef.current?.key === glowKey ? milkyWayGlowCacheRef.current.canvas : null;
       if (!glowCanvas) {
@@ -494,7 +570,7 @@ export default function SkyCanvas({
             for (const ring of brightRings) {
               offCtx.beginPath();
               ring.vertices.forEach((altAz, i) => {
-                const point = projectAltAz(altAz, canvasSize, rotation);
+                const point = projectAltAz(altAz, canvasSize, rotation, zoom, pan);
                 if (!point) return;
                 if (i === 0) offCtx.moveTo(point.x, point.y);
                 else offCtx.lineTo(point.x, point.y);
@@ -518,8 +594,8 @@ export default function SkyCanvas({
       // 3. Constellation lines, faded individually near the horizon
       ctx.lineWidth = CONSTELLATION_LINE_WIDTH;
       for (const segment of constellationSegments) {
-        const pa = projectAltAz(segment.a, canvasSize, rotation);
-        const pb = projectAltAz(segment.b, canvasSize, rotation);
+        const pa = projectAltAz(segment.a, canvasSize, rotation, zoom, pan);
+        const pb = projectAltAz(segment.b, canvasSize, rotation, zoom, pan);
         if (!pa || !pb) continue;
         const fade = Math.min(
           horizonFadeFactor(segment.a.altitudeDeg),
@@ -535,16 +611,21 @@ export default function SkyCanvas({
 
       // 4. Stars: glow pass first (batched, additive), then points, both
       // colored from B-V and sized/faded from extinction-adjusted magnitude.
+      // Radius scales sub-linearly with zoom (starZoomSizeFactor) so stars
+      // grow when zoomed in without dominating the frame at 20x.
+      const starSizeFactor = starZoomSizeFactor(zoom);
       ctx.globalCompositeOperation = 'lighter';
       for (const star of stars) {
         if (star.effectiveMag >= STAR_GLOW_MAG_THRESHOLD) continue;
         const point = projectAltAz(
           { altitudeDeg: star.altitudeDeg, azimuthDeg: star.azimuthDeg },
           canvasSize,
-          rotation
+          rotation,
+          zoom,
+          pan
         );
         if (!point) continue;
-        const glowRadius = magnitudeToRadiusPx(star.effectiveMag) * STAR_GLOW_RADIUS_SCALE;
+        const glowRadius = magnitudeToRadiusPx(star.effectiveMag) * STAR_GLOW_RADIUS_SCALE * starSizeFactor;
         const gradient = ctx.createRadialGradient(point.x, point.y, 0, point.x, point.y, glowRadius);
         gradient.addColorStop(0, rgbToCss(star.color, STAR_GLOW_ALPHA));
         gradient.addColorStop(1, rgbToCss(star.color, 0));
@@ -559,24 +640,65 @@ export default function SkyCanvas({
         const point = projectAltAz(
           { altitudeDeg: star.altitudeDeg, azimuthDeg: star.azimuthDeg },
           canvasSize,
-          rotation
+          rotation,
+          zoom,
+          pan
         );
         if (!point) continue;
 
         ctx.globalAlpha = magnitudeToAlpha(star.effectiveMag);
         ctx.fillStyle = rgbToCss(star.color, 1);
         ctx.beginPath();
-        ctx.arc(point.x, point.y, magnitudeToRadiusPx(star.effectiveMag), 0, Math.PI * 2);
+        ctx.arc(point.x, point.y, magnitudeToRadiusPx(star.effectiveMag) * starSizeFactor, 0, Math.PI * 2);
         ctx.fill();
       }
       ctx.globalAlpha = 1;
+
+      // 4b. Selected star: pulsing ring + always-visible larger label, drawn
+      // on top of the plain star point above.
+      if (selectedStarIdRef.current !== null) {
+        const selected = starsRenderByIdRef.current?.get(selectedStarIdRef.current);
+        if (selected) {
+          const point = projectAltAz(
+            { altitudeDeg: selected.altitudeDeg, azimuthDeg: selected.azimuthDeg },
+            canvasSize,
+            rotation,
+            zoom,
+            pan
+          );
+          if (point) {
+            const starRadius = magnitudeToRadiusPx(selected.effectiveMag) * starSizeFactor;
+            const pulseT = (performance.now() % SELECTED_STAR_RING_PULSE_PERIOD_MS) / SELECTED_STAR_RING_PULSE_PERIOD_MS;
+            const pulseMid = (SELECTED_STAR_RING_ALPHA_MIN + SELECTED_STAR_RING_ALPHA_MAX) / 2;
+            const pulseAmplitude = (SELECTED_STAR_RING_ALPHA_MAX - SELECTED_STAR_RING_ALPHA_MIN) / 2;
+            const ringAlpha = pulseMid + pulseAmplitude * Math.sin(pulseT * 2 * Math.PI);
+
+            ctx.strokeStyle = `rgba(${SELECTED_STAR_RING_COLOR_RGB}, ${ringAlpha})`;
+            ctx.lineWidth = SELECTED_STAR_RING_WIDTH_PX;
+            ctx.beginPath();
+            ctx.arc(point.x, point.y, starRadius + SELECTED_STAR_RING_EXTRA_RADIUS_PX, 0, Math.PI * 2);
+            ctx.stroke();
+
+            const selectedCatalogStar = starByIdRef.current?.get(selectedStarIdRef.current);
+            if (selectedCatalogStar) {
+              ctx.font = SELECTED_STAR_LABEL_FONT;
+              ctx.textAlign = 'left';
+              ctx.textBaseline = 'middle';
+              ctx.fillStyle = SELECTED_STAR_LABEL_COLOR;
+              ctx.fillText(starDisplayName(selectedCatalogStar), point.x + STAR_LABEL_OFFSET_PX, point.y - STAR_LABEL_OFFSET_PX);
+            }
+          }
+        }
+      }
 
       // 5. Planets
       for (const planet of planets) {
         const point = projectAltAz(
           { altitudeDeg: planet.altitudeDeg, azimuthDeg: planet.azimuthDeg },
           canvasSize,
-          rotation
+          rotation,
+          zoom,
+          pan
         );
         if (!point) continue;
 
@@ -596,7 +718,7 @@ export default function SkyCanvas({
       // so a barely-below-horizon sun still renders right at the edge)
       if (sun.altitudeDeg >= SUN_MIN_ALTITUDE_DEG) {
         const clamped = { altitudeDeg: Math.max(0, sun.altitudeDeg), azimuthDeg: sun.azimuthDeg };
-        const point = projectAltAz(clamped, canvasSize, rotation);
+        const point = projectAltAz(clamped, canvasSize, rotation, zoom, pan);
         if (point) {
           const gradient = ctx.createRadialGradient(
             point.x,
@@ -625,7 +747,9 @@ export default function SkyCanvas({
         const point = projectAltAz(
           { altitudeDeg: moon.altitudeDeg, azimuthDeg: moon.azimuthDeg },
           canvasSize,
-          rotation
+          rotation,
+          zoom,
+          pan
         );
         if (point) {
           drawMoonPhase(ctx, point.x, point.y, MOON_RADIUS_PX, moon.phaseAngleDeg);
@@ -644,13 +768,27 @@ export default function SkyCanvas({
             ? new Set(scenePointerTargets.map((t) => t.label))
             : null;
 
+        // Above ZOOM_ALL_NAMED_STARS_THRESHOLD, every named star in view gets
+        // a label, not just the curated 14; above ZOOM_BAYER_LABELS_THRESHOLD,
+        // unnamed-but-Bayer'd stars get one too.
+        const starsToLabel =
+          zoom > ZOOM_ALL_NAMED_STARS_THRESHOLD ? allNamedStarsRef.current ?? labeledStars : labeledStars;
+
         ctx.font = '11px sans-serif';
         ctx.fillStyle = STAR_LABEL_COLOR;
-        for (const star of labeledStars) {
+        for (const star of starsToLabel) {
           if (pointedAtNames?.has(star.name)) continue;
-          const point = projectAltAz(star.altAz, canvasSize, rotation);
+          const point = projectAltAz(star.altAz, canvasSize, rotation, zoom, pan);
           if (!point) continue;
           ctx.fillText(star.name, point.x + STAR_LABEL_OFFSET_PX, point.y - STAR_LABEL_OFFSET_PX);
+        }
+
+        if (zoom > ZOOM_BAYER_LABELS_THRESHOLD && bayerLabeledStarsRef.current) {
+          for (const star of bayerLabeledStarsRef.current) {
+            const point = projectAltAz(star.altAz, canvasSize, rotation, zoom, pan);
+            if (!point) continue;
+            ctx.fillText(star.name, point.x + STAR_LABEL_OFFSET_PX, point.y - STAR_LABEL_OFFSET_PX);
+          }
         }
 
         ctx.font = '10px sans-serif';
@@ -658,7 +796,7 @@ export default function SkyCanvas({
         ctx.fillStyle = CONSTELLATION_LABEL_COLOR;
         ctx.letterSpacing = '0.8px'; // 0.08em at 10px font
         for (const label of constellationLabels) {
-          const centroid = projectCentroid(label.aboveHorizonEndpoints, canvasSize, rotation);
+          const centroid = projectCentroid(label.aboveHorizonEndpoints, canvasSize, rotation, zoom, pan);
           if (!centroid) continue;
           ctx.fillText(label.name.toUpperCase(), centroid.x, centroid.y);
         }
@@ -675,7 +813,7 @@ export default function SkyCanvas({
         ctx.textAlign = 'left';
         ctx.textBaseline = 'middle';
         for (const target of scenePointerTargets) {
-          const anchor = projectCentroid(target.altAzPoints, canvasSize, rotation);
+          const anchor = projectCentroid(target.altAzPoints, canvasSize, rotation, zoom, pan);
           if (!anchor) continue;
           const endX = anchor.x + SCENE_POINTER_LINE_LENGTH_PX;
           const endY = anchor.y - SCENE_POINTER_LINE_LENGTH_PX;
@@ -688,10 +826,15 @@ export default function SkyCanvas({
         ctx.globalAlpha = 1;
       }
 
-      // 10. Horizon circle + cardinal labels (also rotate with the sky)
-      const radius = getSkyRadius(canvasSize);
-      const centerX = width / 2;
-      const centerY = height / 2;
+      // 10. Horizon circle + cardinal labels (also rotate with the sky).
+      // Not alt/az-driven, so zoom/pan is applied manually here, matching
+      // exactly how projectRaw applies it: screen = raw*zoom + pan.
+      const rawRadius = getSkyRadius(canvasSize);
+      const rawCenterX = width / 2;
+      const rawCenterY = height / 2;
+      const radius = rawRadius * zoom;
+      const centerX = rawCenterX * zoom + pan.x;
+      const centerY = rawCenterY * zoom + pan.y;
 
       ctx.strokeStyle = HORIZON_COLOR;
       ctx.lineWidth = 1;
@@ -705,9 +848,9 @@ export default function SkyCanvas({
       ctx.textBaseline = 'middle';
       for (const [label, azimuthDeg] of CARDINALS) {
         const azRad = ((azimuthDeg - rotation) * Math.PI) / 180;
-        const labelRadius = radius + CARDINAL_LABEL_OFFSET_PX;
-        const x = centerX + labelRadius * Math.sin(azRad);
-        const y = centerY - labelRadius * Math.cos(azRad);
+        const rawLabelRadius = rawRadius + CARDINAL_LABEL_OFFSET_PX;
+        const x = (rawCenterX + rawLabelRadius * Math.sin(azRad)) * zoom + pan.x;
+        const y = (rawCenterY - rawLabelRadius * Math.cos(azRad)) * zoom + pan.y;
         ctx.fillText(label, x, y);
       }
 
@@ -740,26 +883,41 @@ export default function SkyCanvas({
 
       const starAltAzById = new Map<number, AltAz>();
       const starsRender: RenderStar[] = new Array(starsCatalog.length);
+      const starsRenderById = new Map<number, RenderStar>();
       const labeledStars: LabeledStar[] = [];
+      const allNamedStars: LabeledStar[] = [];
+      const bayerLabeledStars: LabeledStar[] = [];
       let aboveHorizonCount = 0;
       for (let i = 0; i < starsCatalog.length; i++) {
         const star = starsCatalog[i];
         const altAz = computeStarAltAz(star, currentObserver, currentDateUtc);
         starAltAzById.set(star.id, altAz);
         if (altAz.altitudeDeg >= 0) aboveHorizonCount++;
-        starsRender[i] = {
+        const renderStar: RenderStar = {
+          id: star.id,
           altitudeDeg: altAz.altitudeDeg,
           azimuthDeg: altAz.azimuthDeg,
           effectiveMag: effectiveMagnitude(star.mag, altAz.altitudeDeg),
           color: bvToRgb(star.ci),
         };
-        const labelName = labeledStarIds.get(star.id);
-        if (labelName && altAz.altitudeDeg >= STAR_LABEL_MIN_ALTITUDE_DEG) {
-          labeledStars.push({ name: labelName, altAz });
+        starsRender[i] = renderStar;
+        starsRenderById.set(star.id, renderStar);
+
+        if (altAz.altitudeDeg >= STAR_LABEL_MIN_ALTITUDE_DEG) {
+          const labelName = labeledStarIds.get(star.id);
+          if (labelName) labeledStars.push({ name: labelName, altAz });
+          if (star.proper) {
+            allNamedStars.push({ name: star.proper, altAz });
+          } else if (star.bayer) {
+            bayerLabeledStars.push({ name: bayerShortLabel(star.bayer), altAz });
+          }
         }
       }
       starsRef.current = starsRender;
+      starsRenderByIdRef.current = starsRenderById;
       labeledStarsRef.current = labeledStars;
+      allNamedStarsRef.current = allNamedStars;
+      bayerLabeledStarsRef.current = bayerLabeledStars;
       aboveHorizonStarCountRef.current = aboveHorizonCount;
 
       const segments: ConstellationSegment[] = [];
@@ -960,6 +1118,8 @@ export default function SkyCanvas({
     let lastDrawnRotation = rotationRef.current;
     let lastDrawnLabelsEnabled = labelsEnabledRef.current;
     let lastDrawnPointerOpacity = scenePointerOpacityRef.current;
+    let lastDrawnZoom = zoomRef.current;
+    let lastDrawnPan = panRef.current;
 
     function tick() {
       rafId = requestAnimationFrame(tick);
@@ -973,10 +1133,19 @@ export default function SkyCanvas({
       const currentRotation = rotationRef.current;
       const currentLabelsEnabled = labelsEnabledRef.current;
       const currentPointerOpacity = scenePointerOpacityRef.current;
+      const currentZoom = zoomRef.current;
+      const currentPan = panRef.current;
+      // A selected star's ring pulses continuously (sine wave over real
+      // time), so it needs a redraw every tick regardless of what else
+      // changed - everything else here is otherwise static between frames.
+      const hasSelection = selectedStarIdRef.current !== null;
       const redrawOnlyChanged =
         currentRotation !== lastDrawnRotation ||
         currentLabelsEnabled !== lastDrawnLabelsEnabled ||
-        currentPointerOpacity !== lastDrawnPointerOpacity;
+        currentPointerOpacity !== lastDrawnPointerOpacity ||
+        currentZoom !== lastDrawnZoom ||
+        currentPan !== lastDrawnPan ||
+        hasSelection;
 
       if (!dateChanged && !redrawOnlyChanged) return; // nothing changed - do nothing
 
@@ -987,13 +1156,16 @@ export default function SkyCanvas({
         lastComputedDateMs = currentDateMs;
         recompute(currentDate, observerRef.current); // ends with draw()
       } else {
-        // Rotation/labels/pointer-opacity changed but not the date: cheap
-        // reprojection only, never throttled by the astronomy-recompute budget.
+        // Rotation/labels/pointer-opacity/zoom/pan/selection changed but not
+        // the date: cheap reprojection only, never throttled by the
+        // astronomy-recompute budget.
         draw();
       }
       lastDrawnRotation = currentRotation;
       lastDrawnLabelsEnabled = currentLabelsEnabled;
       lastDrawnPointerOpacity = currentPointerOpacity;
+      lastDrawnZoom = currentZoom;
+      lastDrawnPan = currentPan;
     }
 
     function handleResize() {
@@ -1002,6 +1174,158 @@ export default function SkyCanvas({
       draw();
     }
 
+    // --- Zoom (wheel + pinch), pan (drag), star selection (click), and
+    // double-click-to-zoom. All live here because they need the canvas's
+    // bounding rect and the projected star positions, both only available
+    // where the canvas itself is.
+    const activePointers = new Map<number, { x: number; y: number }>();
+    let pointerDownPos: { x: number; y: number } | null = null;
+    let hasDragged = false;
+    let pinchStartDist: number | null = null;
+
+    function canvasPoint(clientX: number, clientY: number): { x: number; y: number } {
+      const rect = canvas!.getBoundingClientRect();
+      return { x: clientX - rect.left, y: clientY - rect.top };
+    }
+
+    function applyZoomAroundPoint(anchor: { x: number; y: number }, targetZoom: number) {
+      const { zoom: newZoom, pan: newPan } = zoomAroundPoint(
+        zoomRef.current,
+        panRef.current,
+        anchor,
+        targetZoom,
+        ZOOM_MIN,
+        ZOOM_MAX
+      );
+      if (newZoom === zoomRef.current && newPan.x === panRef.current.x && newPan.y === panRef.current.y) {
+        return;
+      }
+      zoomRef.current = newZoom;
+      panRef.current = newPan;
+      onZoomPanChangeRef.current(newZoom, newPan);
+    }
+
+    function findNearestStar(point: { x: number; y: number }): CatalogStarRecord | null {
+      const stars = starsRef.current;
+      const starById = starByIdRef.current;
+      if (!stars || !starById) return null;
+
+      const width = window.innerWidth;
+      const height = window.innerHeight;
+      const canvasSize = { width, height };
+      const rotation = rotationRef.current;
+      const zoom = zoomRef.current;
+      const pan = panRef.current;
+
+      let best: CatalogStarRecord | null = null;
+      let bestDist = HIT_TEST_RADIUS_PX;
+      for (const star of stars) {
+        const projected = projectAltAz(
+          { altitudeDeg: star.altitudeDeg, azimuthDeg: star.azimuthDeg },
+          canvasSize,
+          rotation,
+          zoom,
+          pan
+        );
+        if (!projected) continue;
+        const d = Math.hypot(projected.x - point.x, projected.y - point.y);
+        if (d <= bestDist) {
+          bestDist = d;
+          best = starById.get(star.id) ?? null;
+        }
+      }
+      return best;
+    }
+
+    function handleWheel(e: WheelEvent) {
+      e.preventDefault();
+      const anchor = canvasPoint(e.clientX, e.clientY);
+      const factor = Math.exp(-e.deltaY * WHEEL_ZOOM_SENSITIVITY);
+      applyZoomAroundPoint(anchor, zoomRef.current * factor);
+    }
+
+    function handlePointerDown(e: PointerEvent) {
+      activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      if (activePointers.size === 1) {
+        pointerDownPos = canvasPoint(e.clientX, e.clientY);
+        hasDragged = false;
+        pinchStartDist = null;
+      } else if (activePointers.size === 2) {
+        const pts = [...activePointers.values()];
+        pinchStartDist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+        hasDragged = true; // a pinch is never a click
+      }
+    }
+
+    function handlePointerMove(e: PointerEvent) {
+      if (!activePointers.has(e.pointerId)) return;
+      activePointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+
+      if (activePointers.size === 2) {
+        const pts = [...activePointers.values()];
+        const dist = Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y);
+        const centroidClient = { x: (pts[0].x + pts[1].x) / 2, y: (pts[0].y + pts[1].y) / 2 };
+        const anchor = canvasPoint(centroidClient.x, centroidClient.y);
+        if (pinchStartDist !== null && pinchStartDist > 0) {
+          applyZoomAroundPoint(anchor, zoomRef.current * (dist / pinchStartDist));
+        }
+        pinchStartDist = dist;
+        return;
+      }
+
+      if (activePointers.size === 1 && pointerDownPos !== null) {
+        const current = canvasPoint(e.clientX, e.clientY);
+        const dx = current.x - pointerDownPos.x;
+        const dy = current.y - pointerDownPos.y;
+        if (Math.hypot(dx, dy) > CLICK_DRAG_THRESHOLD_PX) hasDragged = true;
+
+        if (zoomRef.current > ZOOM_MIN) {
+          const newPan = { x: panRef.current.x + e.movementX, y: panRef.current.y + e.movementY };
+          panRef.current = newPan;
+          onZoomPanChangeRef.current(zoomRef.current, newPan);
+        }
+      }
+    }
+
+    function handlePointerUp(e: PointerEvent) {
+      const wasSingle = activePointers.size === 1;
+      const upPos = canvasPoint(e.clientX, e.clientY);
+      activePointers.delete(e.pointerId);
+      const remaining = activePointers.size;
+      if (remaining < 2) pinchStartDist = null;
+
+      if (wasSingle && remaining === 0 && !hasDragged) {
+        onSelectStarRef.current(findNearestStar(upPos));
+      }
+      if (remaining === 0) {
+        pointerDownPos = null;
+        hasDragged = false;
+      }
+    }
+
+    function handlePointerCancel(e: PointerEvent) {
+      activePointers.delete(e.pointerId);
+      if (activePointers.size < 2) pinchStartDist = null;
+      if (activePointers.size === 0) {
+        pointerDownPos = null;
+        hasDragged = false;
+      }
+    }
+
+    function handleDoubleClick(e: MouseEvent) {
+      if (zoomRef.current >= ZOOM_MAX) return; // "only works below 20x"
+      const anchor = canvasPoint(e.clientX, e.clientY);
+      applyZoomAroundPoint(anchor, zoomRef.current * DOUBLE_CLICK_ZOOM_FACTOR);
+    }
+
+    canvas.style.touchAction = 'none';
+    canvas.addEventListener('wheel', handleWheel, { passive: false });
+    canvas.addEventListener('pointerdown', handlePointerDown);
+    canvas.addEventListener('pointermove', handlePointerMove);
+    canvas.addEventListener('pointerup', handlePointerUp);
+    canvas.addEventListener('pointercancel', handlePointerCancel);
+    canvas.addEventListener('dblclick', handleDoubleClick);
+
     loadRawData();
     rafId = requestAnimationFrame(tick);
     window.addEventListener('resize', handleResize);
@@ -1009,6 +1333,12 @@ export default function SkyCanvas({
       cancelled = true;
       cancelAnimationFrame(rafId);
       window.removeEventListener('resize', handleResize);
+      canvas.removeEventListener('wheel', handleWheel);
+      canvas.removeEventListener('pointerdown', handlePointerDown);
+      canvas.removeEventListener('pointermove', handlePointerMove);
+      canvas.removeEventListener('pointerup', handlePointerUp);
+      canvas.removeEventListener('pointercancel', handlePointerCancel);
+      canvas.removeEventListener('dblclick', handleDoubleClick);
     };
   }, []);
 

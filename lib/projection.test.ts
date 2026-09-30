@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { getSkyRadius, projectAltAz, projectAltAzUnclamped } from './projection';
+import { getSkyRadius, projectAltAz, projectAltAzUnclamped, zoomAroundPoint } from './projection';
 
 const CANVAS = { width: 800, height: 600 };
 const R = getSkyRadius(CANVAS);
@@ -84,5 +84,69 @@ describe('projectAltAzUnclamped', () => {
     // az=90 (east) should still be to the right, at the vertical center.
     expect(point.x).toBeGreaterThan(centerX);
     expect(point.y).toBeCloseTo(centerY, 6);
+  });
+});
+
+describe('projectAltAz with zoom/pan', () => {
+  it('zoom=1, pan=0 matches the unzoomed projection', () => {
+    const zoomed = projectAltAz({ altitudeDeg: 45, azimuthDeg: 30 }, CANVAS, 0, 1, { x: 0, y: 0 });
+    const plain = projectAltAz({ altitudeDeg: 45, azimuthDeg: 30 }, CANVAS);
+    expect(zoomed).toEqual(plain);
+  });
+
+  it('scales distance from canvas origin by zoom, then offsets by pan', () => {
+    const plain = projectAltAz({ altitudeDeg: 45, azimuthDeg: 30 }, CANVAS)!;
+    const zoomed = projectAltAz({ altitudeDeg: 45, azimuthDeg: 30 }, CANVAS, 0, 3, { x: 10, y: -20 })!;
+    expect(zoomed.x).toBeCloseTo(plain.x * 3 + 10, 9);
+    expect(zoomed.y).toBeCloseTo(plain.y * 3 - 20, 9);
+  });
+
+  it('zoom scales the zenith-to-horizon distance (star size / spacing grows with zoom)', () => {
+    const p1 = projectAltAz({ altitudeDeg: 45, azimuthDeg: 0 }, CANVAS, 0, 1)!;
+    const p5 = projectAltAz({ altitudeDeg: 45, azimuthDeg: 0 }, CANVAS, 0, 5)!;
+    const d1 = Math.hypot(p1.x - centerX, p1.y - centerY);
+    const d5 = Math.hypot(p5.x - centerX * 5, p5.y - centerY * 5);
+    expect(d5).toBeCloseTo(d1 * 5, 6);
+  });
+});
+
+describe('zoomAroundPoint', () => {
+  it('keeps a star already under the anchor pixel fixed on screen across a zoom change', () => {
+    const anchor = projectAltAz({ altitudeDeg: 60, azimuthDeg: 10 }, CANVAS, 0, 1, { x: 0, y: 0 })!;
+    const { zoom, pan } = zoomAroundPoint(1, { x: 0, y: 0 }, anchor, 4);
+    expect(zoom).toBe(4);
+    const after = projectAltAz({ altitudeDeg: 60, azimuthDeg: 10 }, CANVAS, 0, zoom, pan)!;
+    expect(after.x).toBeCloseTo(anchor.x, 9);
+    expect(after.y).toBeCloseTo(anchor.y, 9);
+  });
+
+  it('keeps the anchor fixed across a second zoom step from a non-trivial start', () => {
+    // Check the fixed-point equation directly: anchor == raw*zoom + pan,
+    // where raw is the anchor's zoom=1 coordinate (pan={0,0} at zoom=1).
+    const anchor = { x: 550, y: 240 };
+    const step1 = zoomAroundPoint(1, { x: 0, y: 0 }, anchor, 3);
+    const step2 = zoomAroundPoint(step1.zoom, step1.pan, anchor, 9);
+    const screen = { x: anchor.x * step2.zoom + step2.pan.x, y: anchor.y * step2.zoom + step2.pan.y };
+    expect(screen.x).toBeCloseTo(anchor.x, 6);
+    expect(screen.y).toBeCloseTo(anchor.y, 6);
+  });
+
+  it('clamps to [min, max]', () => {
+    expect(zoomAroundPoint(1, { x: 0, y: 0 }, { x: 0, y: 0 }, 50).zoom).toBe(20);
+    expect(zoomAroundPoint(5, { x: 0, y: 0 }, { x: 0, y: 0 }, 0.1).zoom).toBe(1);
+  });
+
+  it('forces pan back to {0,0} when zooming down to 1x', () => {
+    const { zoom, pan } = zoomAroundPoint(4, { x: 120, y: -80 }, { x: 300, y: 200 }, 1);
+    expect(zoom).toBe(1);
+    expect(pan).toEqual({ x: 0, y: 0 });
+  });
+
+  it('is idempotent chaining zoom-in then zoom-out around the same anchor', () => {
+    const anchor = { x: 500, y: 400 };
+    const step1 = zoomAroundPoint(1, { x: 0, y: 0 }, anchor, 8);
+    const step2 = zoomAroundPoint(step1.zoom, step1.pan, anchor, 1);
+    expect(step2.zoom).toBe(1);
+    expect(step2.pan).toEqual({ x: 0, y: 0 });
   });
 });

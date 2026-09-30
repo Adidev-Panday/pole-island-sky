@@ -8,8 +8,8 @@ interface CompassDialProps {
   onChange: (rotationDeg: number) => void;
 }
 
-const DIAL_SIZE_DESKTOP_PX = 60;
-const DIAL_SIZE_MOBILE_PX = 48;
+export const DIAL_SIZE_DESKTOP_PX = 60;
+export const DIAL_SIZE_MOBILE_PX = 48;
 const SNAP_THRESHOLD_DEG = 3;
 const TICKS: Array<[string, number]> = [
   ['N', 0],

@@ -9,6 +9,7 @@ const SUN_ID = 0;
 
 interface HygRow {
   id: string;
+  hip: string;
   ra: string;
   dec: string;
   mag: string;
@@ -19,11 +20,24 @@ interface HygRow {
   proper: string;
   bayer: string;
   con: string;
+  dist: string;
+  absmag: string;
+  lum: string;
 }
+
+// HYG's placeholder distance for stars with no measured parallax - not a
+// real distance. absmag/lum derived from it are meaningless too (e.g. an
+// absmag of -14 for a mag-6 star), so all three are nulled out together.
+const UNKNOWN_PARALLAX_DIST_PC = 100000;
 
 function round(value: number, decimals: number): number {
   const factor = 10 ** decimals;
   return Math.round(value * factor) / factor;
+}
+
+function roundSigFigs(value: number, sigFigs: number): number {
+  if (value === 0) return 0;
+  return Number(value.toPrecision(sigFigs));
 }
 
 function nullableString(value: string): string | null {
@@ -80,19 +94,29 @@ async function main() {
     const dec = Number.parseFloat(row.dec);
     const ci = nullableFloat(row.ci);
     const spectRaw = nullableString(row.spect);
+    const hip = nullableFloat(row.hip);
+
+    const distRaw = nullableFloat(row.dist);
+    const hasKnownDistance = distRaw !== null && distRaw < UNKNOWN_PARALLAX_DIST_PC;
+    const absmagRaw = nullableFloat(row.absmag);
+    const lumRaw = nullableFloat(row.lum);
 
     stars.push({
       id,
+      hip: hip === null ? null : Math.round(hip),
       ra: round(ra, 6),
       dec: round(dec, 5),
       mag: round(mag, 2),
       ci: ci === null ? null : round(ci, 2),
-      spect: spectRaw === null ? null : spectRaw.charAt(0),
+      spect: spectRaw,
       pmra: nullableFloat(row.pmra),
       pmdec: nullableFloat(row.pmdec),
       proper: nullableString(row.proper),
       bayer: nullableString(row.bayer),
       con: nullableString(row.con),
+      dist: hasKnownDistance ? round(distRaw!, 2) : null,
+      absmag: hasKnownDistance && absmagRaw !== null ? round(absmagRaw, 2) : null,
+      lum: hasKnownDistance && lumRaw !== null ? roundSigFigs(lumRaw, 3) : null,
     });
   }
 
@@ -129,6 +153,10 @@ async function main() {
       proper: stars.filter((s) => s.proper === null).length,
       bayer: stars.filter((s) => s.bayer === null).length,
       con: stars.filter((s) => s.con === null).length,
+      hip: stars.filter((s) => s.hip === null).length,
+      dist: stars.filter((s) => s.dist === null).length,
+      absmag: stars.filter((s) => s.absmag === null).length,
+      lum: stars.filter((s) => s.lum === null).length,
     },
   };
 

@@ -13,16 +13,20 @@ export interface AltAz {
 /** A star from the compiled HYG catalog (see scripts/build-star-catalog.ts). */
 export interface CatalogStarRecord {
   id: number;
+  hip: number | null; // Hipparcos catalog number
   ra: number; // hours, J2000
   dec: number; // degrees, J2000
   mag: number;
   ci: number | null;
-  spect: string | null;
+  spect: string | null; // full spectral type string, e.g. "A0Vvar"
   pmra: number | null; // mas/yr
   pmdec: number | null; // mas/yr
   proper: string | null;
   bayer: string | null;
   con: string | null;
+  dist: number | null; // parsecs; null if HYG has no measured parallax
+  absmag: number | null; // absolute visual magnitude
+  lum: number | null; // luminosity, solar units
 }
 
 const J2000_EPOCH_MS = Date.UTC(2000, 0, 1, 12, 0, 0);

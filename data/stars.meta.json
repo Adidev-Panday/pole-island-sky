@@ -31,6 +31,10 @@
     "pmdec": 0,
     "proper": 8562,
     "bayer": 7403,
-    "con": 0
+    "con": 0,
+    "hip": 50,
+    "dist": 206,
+    "absmag": 206,
+    "lum": 206
   }
 }

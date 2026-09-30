@@ -13,6 +13,16 @@ export interface ProjectedPoint {
   y: number;
 }
 
+export interface PanOffset {
+  x: number;
+  y: number;
+}
+
+export const ZOOM_MIN = 1;
+export const ZOOM_MAX = 20;
+
+const IDENTITY_PAN: PanOffset = { x: 0, y: 0 };
+
 /**
  * Inset from the canvas edge so the horizon circle isn't clipped by the
  * viewport, and so cardinal labels drawn just outside the circle (see
@@ -53,13 +63,23 @@ const TAN_45_DEG = Math.tan(45 * DEG2RAD); // == 1, kept explicit to match the p
  * radius (2*f*tan(z/2)) so that z=90 (the horizon) lands exactly on R,
  * rather than 2R — the horizon must clip at the canvas edge.
  *
+ * `zoom`/`pan` are applied last, uniformly, to the finished (rotationDeg
+ * already baked in) pixel coordinates: `screen = raw * zoom + pan`. This
+ * keeps the angular math independent of the view transform - everything
+ * drawn through this function (or the matching manual transform for the
+ * horizon ring, which isn't alt/az-driven) scales and translates together,
+ * so the whole rendered scene zooms as one consistent picture rather than
+ * stars drifting relative to the horizon.
+ *
  * Returns null for anything below the horizon (altitude < 0).
  */
 function projectRaw(
   altitudeDeg: number,
   azimuthDeg: number,
   canvasSize: CanvasSize,
-  rotationDeg: number
+  rotationDeg: number,
+  zoom: number,
+  pan: PanOffset
 ): ProjectedPoint {
   const radius = getSkyRadius(canvasSize);
 
@@ -70,16 +90,18 @@ function projectRaw(
   const x = canvasSize.width / 2 + r * Math.sin(azRad);
   const y = canvasSize.height / 2 - r * Math.cos(azRad);
 
-  return { x, y };
+  return { x: x * zoom + pan.x, y: y * zoom + pan.y };
 }
 
 export function projectAltAz(
   { altitudeDeg, azimuthDeg }: AltAzInput,
   canvasSize: CanvasSize,
-  rotationDeg = 0
+  rotationDeg = 0,
+  zoom = 1,
+  pan: PanOffset = IDENTITY_PAN
 ): ProjectedPoint | null {
   if (altitudeDeg < 0) return null;
-  return projectRaw(Math.min(90, altitudeDeg), azimuthDeg, canvasSize, rotationDeg);
+  return projectRaw(Math.min(90, altitudeDeg), azimuthDeg, canvasSize, rotationDeg, zoom, pan);
 }
 
 /**
@@ -93,7 +115,49 @@ export function projectAltAz(
 export function projectAltAzUnclamped(
   { altitudeDeg, azimuthDeg }: AltAzInput,
   canvasSize: CanvasSize,
-  rotationDeg = 0
+  rotationDeg = 0,
+  zoom = 1,
+  pan: PanOffset = IDENTITY_PAN
 ): ProjectedPoint {
-  return projectRaw(altitudeDeg, azimuthDeg, canvasSize, rotationDeg);
+  return projectRaw(altitudeDeg, azimuthDeg, canvasSize, rotationDeg, zoom, pan);
+}
+
+/**
+ * Computes the {zoom, pan} that results from zooming to `targetZoom` (clamped
+ * to [min, max]) while keeping `anchor` (a canvas-pixel point, e.g. the
+ * cursor or pinch center) visually fixed on screen.
+ *
+ * Derivation: a point's screen position is `raw*zoom + pan`. The raw
+ * (pre-zoom) coordinate under the anchor is therefore
+ * `(anchor - currentPan) / currentZoom`, which is invariant under the zoom
+ * change; solving `anchor = rawAnchor*newZoom + newPan` for newPan keeps
+ * that same raw point under the same screen pixel at the new zoom level.
+ *
+ * At zoom <= 1 (the "whole hemisphere" default view), pan is forced back to
+ * {0, 0} - panning is disabled at 1x, so there's nothing for a lingering pan
+ * offset to do except leave the horizon circle off-center.
+ */
+export function zoomAroundPoint(
+  currentZoom: number,
+  currentPan: PanOffset,
+  anchor: ProjectedPoint,
+  targetZoom: number,
+  min = ZOOM_MIN,
+  max = ZOOM_MAX
+): { zoom: number; pan: PanOffset } {
+  const newZoom = Math.min(max, Math.max(min, targetZoom));
+  if (newZoom <= ZOOM_MIN) {
+    return { zoom: newZoom, pan: { x: 0, y: 0 } };
+  }
+
+  const rawAnchorX = (anchor.x - currentPan.x) / currentZoom;
+  const rawAnchorY = (anchor.y - currentPan.y) / currentZoom;
+
+  return {
+    zoom: newZoom,
+    pan: {
+      x: anchor.x - rawAnchorX * newZoom,
+      y: anchor.y - rawAnchorY * newZoom,
+    },
+  };
 }
