@@ -8,7 +8,10 @@
     "start": "next start",
     "lint": "eslint",
     "test": "vitest run",
-    "build:stars": "tsx scripts/build-star-catalog.ts"
+    "build:stars": "tsx scripts/build-star-catalog.ts",
+    "build:constellations": "tsx scripts/build-constellations.ts",
+    "build:milkyway": "tsx scripts/build-milkyway.ts",
+    "build:data": "npm run build:stars && npm run build:constellations && npm run build:milkyway"
   },
   "dependencies": {
     "astronomy-engine": "^2.1.19",

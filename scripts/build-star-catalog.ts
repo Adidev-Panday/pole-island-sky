@@ -1,15 +1,9 @@
-import { mkdirSync, existsSync, readFileSync, writeFileSync } from 'fs';
+import { mkdirSync, writeFileSync } from 'fs';
 import path from 'path';
 import { parse } from 'csv-parse/sync';
 import type { CatalogStarRecord } from '../lib/sky';
+import { DATA_DIR, PUBLIC_DATA_DIR, HYG_URL, HYG_CACHE_PATH, fetchCached } from './lib/cache';
 
-const HYG_URL =
-  'https://raw.githubusercontent.com/astronexus/HYG-Database/main/hyg/CURRENT/hygdata_v41.csv';
-
-const CACHE_DIR = path.join(__dirname, '.cache');
-const CACHE_PATH = path.join(CACHE_DIR, 'hygdata_v41.csv');
-const DATA_DIR = path.join(__dirname, '..', 'data');
-const PUBLIC_DATA_DIR = path.join(__dirname, '..', 'public', 'data');
 const MAGNITUDE_LIMIT = 6.5;
 const SUN_ID = 0;
 
@@ -25,27 +19,6 @@ interface HygRow {
   proper: string;
   bayer: string;
   con: string;
-}
-
-async function ensureCsvCached(): Promise<string> {
-  if (existsSync(CACHE_PATH)) {
-    console.log(`Using cached HYG catalog at ${CACHE_PATH}`);
-    return readFileSync(CACHE_PATH, 'utf8');
-  }
-
-  console.log(`Downloading HYG v4.1 catalog from ${HYG_URL} ...`);
-  const response = await fetch(HYG_URL);
-  if (!response.ok) {
-    throw new Error(
-      `Failed to download HYG catalog: ${response.status} ${response.statusText}`
-    );
-  }
-  const csv = await response.text();
-
-  mkdirSync(CACHE_DIR, { recursive: true });
-  writeFileSync(CACHE_PATH, csv, 'utf8');
-  console.log(`Cached HYG catalog to ${CACHE_PATH}`);
-  return csv;
 }
 
 function round(value: number, decimals: number): number {
@@ -77,7 +50,7 @@ function magHistogram(mags: number[]): Record<string, number> {
 }
 
 async function main() {
-  const csv = await ensureCsvCached();
+  const csv = await fetchCached(HYG_URL, HYG_CACHE_PATH);
 
   const rows: HygRow[] = parse(csv, {
     columns: true,
