@@ -1,14 +1,15 @@
 'use client';
 
 import { useCallback, useRef } from 'react';
+import { useIsMobile } from '@/hooks/useIsMobile';
 
 interface CompassDialProps {
   rotationDeg: number;
   onChange: (rotationDeg: number) => void;
 }
 
-const DIAL_SIZE_PX = 60;
-const DIAL_RADIUS_PX = DIAL_SIZE_PX / 2;
+const DIAL_SIZE_DESKTOP_PX = 60;
+const DIAL_SIZE_MOBILE_PX = 48;
 const SNAP_THRESHOLD_DEG = 3;
 const TICKS: Array<[string, number]> = [
   ['N', 0],
@@ -23,6 +24,9 @@ function normalizeDeg(deg: number): number {
 
 export default function CompassDial({ rotationDeg, onChange }: CompassDialProps) {
   const dialRef = useRef<HTMLDivElement>(null);
+  const isMobile = useIsMobile();
+  const dialSize = isMobile ? DIAL_SIZE_MOBILE_PX : DIAL_SIZE_DESKTOP_PX;
+  const dialRadius = dialSize / 2;
 
   const angleFromEvent = useCallback((clientX: number, clientY: number): number | null => {
     const dial = dialRef.current;
@@ -56,15 +60,18 @@ export default function CompassDial({ rotationDeg, onChange }: CompassDialProps)
   }
 
   const pointerAngleRad = (rotationDeg * Math.PI) / 180;
-  const pointerX = DIAL_RADIUS_PX + (DIAL_RADIUS_PX - 8) * Math.sin(pointerAngleRad);
-  const pointerY = DIAL_RADIUS_PX - (DIAL_RADIUS_PX - 8) * Math.cos(pointerAngleRad);
+  const pointerX = dialRadius + (dialRadius - 8) * Math.sin(pointerAngleRad);
+  const pointerY = dialRadius - (dialRadius - 8) * Math.cos(pointerAngleRad);
 
   return (
     <div
       style={{
         position: 'fixed',
-        bottom: 96,
-        right: 16,
+        // Mobile's bottom strip stacks into several rows (~200px) instead of
+        // one (~90px on desktop), so the dial needs to clear a lot more of it.
+        bottom: isMobile ? 180 : 96,
+        left: isMobile ? 16 : undefined,
+        right: isMobile ? undefined : 16,
         zIndex: 10,
         display: 'flex',
         flexDirection: 'column',
@@ -78,8 +85,8 @@ export default function CompassDial({ rotationDeg, onChange }: CompassDialProps)
         onPointerDown={handlePointerDown}
         style={{
           position: 'relative',
-          width: DIAL_SIZE_PX,
-          height: DIAL_SIZE_PX,
+          width: dialSize,
+          height: dialSize,
           borderRadius: '50%',
           background: 'rgba(8, 10, 20, 0.72)',
           border: '1px solid rgba(255, 255, 255, 0.14)',
@@ -94,8 +101,8 @@ export default function CompassDial({ rotationDeg, onChange }: CompassDialProps)
       >
         {TICKS.map(([label, deg]) => {
           const rad = (deg * Math.PI) / 180;
-          const tx = DIAL_RADIUS_PX + (DIAL_RADIUS_PX - 10) * Math.sin(rad);
-          const ty = DIAL_RADIUS_PX - (DIAL_RADIUS_PX - 10) * Math.cos(rad);
+          const tx = dialRadius + (dialRadius - 10) * Math.sin(rad);
+          const ty = dialRadius - (dialRadius - 10) * Math.cos(rad);
           return (
             <span
               key={label}
@@ -115,13 +122,13 @@ export default function CompassDial({ rotationDeg, onChange }: CompassDialProps)
         })}
 
         <svg
-          width={DIAL_SIZE_PX}
-          height={DIAL_SIZE_PX}
+          width={dialSize}
+          height={dialSize}
           style={{ position: 'absolute', top: 0, left: 0, pointerEvents: 'none' }}
         >
           <line
-            x1={DIAL_RADIUS_PX}
-            y1={DIAL_RADIUS_PX}
+            x1={dialRadius}
+            y1={dialRadius}
             x2={pointerX}
             y2={pointerY}
             stroke="#e8ecf5"

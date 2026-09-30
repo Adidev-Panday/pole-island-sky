@@ -12,6 +12,7 @@ import {
   formatZoneAbbreviation,
   localMidnightUtc,
 } from '@/lib/time';
+import { useIsMobile } from '@/hooks/useIsMobile';
 
 interface TimeControlsProps {
   dateUtc: Date;
@@ -46,6 +47,9 @@ function formatClock(date: Date | null): string {
 export default function TimeControls({ dateUtc, observer, onChange, onTheMoment }: TimeControlsProps) {
   const [scrubCenter, setScrubCenter] = useState<Date>(() => new Date(REFERENCE_MOMENT));
   const [copied, setCopied] = useState(false);
+  const [readoutExpanded, setReadoutExpanded] = useState(false);
+  const [moreOpen, setMoreOpen] = useState(false);
+  const isMobile = useIsMobile();
 
   const localDate = formatLocalDate(dateUtc, CASCO_BAY_TIME_ZONE);
   const localTime = formatLocalTime(dateUtc, CASCO_BAY_TIME_ZONE);
@@ -156,6 +160,7 @@ export default function TimeControls({ dateUtc, observer, onChange, onTheMoment 
   return (
     <>
       <div
+        onClick={isMobile ? () => setReadoutExpanded((v) => !v) : undefined}
         style={{
           position: 'fixed',
           top: 12,
@@ -166,22 +171,37 @@ export default function TimeControls({ dateUtc, observer, onChange, onTheMoment 
           fontFamily:
             '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
           zIndex: 10,
-          pointerEvents: 'none',
+          pointerEvents: isMobile ? 'auto' : 'none',
+          cursor: isMobile ? 'pointer' : 'default',
         }}
       >
         <div>UTC: {dateUtc.toISOString()}</div>
         <div>
           Casco Bay: {localTime} {zoneAbbrev}, {localDate}
         </div>
-        <div>LST: {lst.toFixed(4)} h</div>
         <div>
-          Sun: alt {sunAltAz.altitudeDeg.toFixed(2)}&deg; | rise {formatClock(sunRiseSet.rise)}, set{' '}
-          {formatClock(sunRiseSet.set)}
+          Sun: alt {sunAltAz.altitudeDeg.toFixed(2)}&deg;
+          {!isMobile && (
+            <>
+              {' '}
+              | rise {formatClock(sunRiseSet.rise)}, set {formatClock(sunRiseSet.set)}
+            </>
+          )}
         </div>
-        <div>
-          Moon: alt {moonAltAz.altitudeDeg.toFixed(2)}&deg; | {moonPhaseName(moonPhaseDeg)},{' '}
-          {(moonIllumination.phase_fraction * 100).toFixed(1)}% lit
-        </div>
+        {(!isMobile || readoutExpanded) && (
+          <>
+            {isMobile && (
+              <div>
+                rise {formatClock(sunRiseSet.rise)}, set {formatClock(sunRiseSet.set)}
+              </div>
+            )}
+            <div>LST: {lst.toFixed(4)} h</div>
+            <div>
+              Moon: alt {moonAltAz.altitudeDeg.toFixed(2)}&deg; | {moonPhaseName(moonPhaseDeg)},{' '}
+              {(moonIllumination.phase_fraction * 100).toFixed(1)}% lit
+            </div>
+          </>
+        )}
       </div>
 
       <div
@@ -202,7 +222,15 @@ export default function TimeControls({ dateUtc, observer, onChange, onTheMoment 
           color: '#e8ecf5',
         }}
       >
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 8 }}>
+        <div
+          style={{
+            display: 'flex',
+            flexDirection: isMobile ? 'column' : 'row',
+            alignItems: isMobile ? 'stretch' : 'center',
+            gap: isMobile ? 20 : 12,
+            marginBottom: 8,
+          }}
+        >
           <div style={{ position: 'relative', flex: 1 }}>
             <div
               style={{
@@ -212,7 +240,7 @@ export default function TimeControls({ dateUtc, observer, onChange, onTheMoment 
                 transform: 'translateX(-50%)',
                 marginBottom: 4,
                 whiteSpace: 'nowrap',
-                fontSize: 12,
+                fontSize: isMobile ? 11 : 12,
                 color: '#e8ecf5',
               }}
             >
@@ -236,6 +264,7 @@ export default function TimeControls({ dateUtc, observer, onChange, onTheMoment 
             onChange={handleDateInput}
             className="time-date-input"
             aria-label="Jump to date"
+            style={isMobile ? { width: '100%', boxSizing: 'border-box' } : undefined}
           />
         </div>
 
@@ -246,39 +275,107 @@ export default function TimeControls({ dateUtc, observer, onChange, onTheMoment 
           <button className="time-btn" onClick={handleNow}>
             Now
           </button>
-          <button className="time-btn" onClick={handleSunset}>
-            Sunset
-          </button>
-          <button className="time-btn" onClick={handleAstronomicalDark}>
-            Astronomical dark
-          </button>
-          <button className="time-btn" onClick={handleAstronomicalDawn}>
-            Astronomical dawn
-          </button>
+          {isMobile ? (
+            <div style={{ position: 'relative' }}>
+              <button className="time-btn" onClick={() => setMoreOpen((v) => !v)}>
+                More &#9662;
+              </button>
+              {moreOpen && (
+                <div
+                  style={{
+                    position: 'absolute',
+                    bottom: '100%',
+                    left: 0,
+                    marginBottom: 4,
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 4,
+                    background: 'rgba(8, 10, 20, 0.92)',
+                    border: '1px solid rgba(255, 255, 255, 0.14)',
+                    padding: 6,
+                    zIndex: 1,
+                  }}
+                >
+                  <button
+                    className="time-btn"
+                    onClick={() => {
+                      handleSunset();
+                      setMoreOpen(false);
+                    }}
+                  >
+                    Sunset
+                  </button>
+                  <button
+                    className="time-btn"
+                    onClick={() => {
+                      handleAstronomicalDark();
+                      setMoreOpen(false);
+                    }}
+                  >
+                    Astronomical dark
+                  </button>
+                  <button
+                    className="time-btn"
+                    onClick={() => {
+                      handleAstronomicalDawn();
+                      setMoreOpen(false);
+                    }}
+                  >
+                    Astronomical dawn
+                  </button>
+                </div>
+              )}
+            </div>
+          ) : (
+            <>
+              <button className="time-btn" onClick={handleSunset}>
+                Sunset
+              </button>
+              <button className="time-btn" onClick={handleAstronomicalDark}>
+                Astronomical dark
+              </button>
+              <button className="time-btn" onClick={handleAstronomicalDawn}>
+                Astronomical dawn
+              </button>
+            </>
+          )}
           <button className="time-btn" onClick={handleCopyLink}>
             {copied ? 'Copied!' : 'Copy link'}
           </button>
 
-          <span style={{ width: 1, height: 16, background: 'rgba(255,255,255,0.14)' }} />
+          {!isMobile && (
+            <span style={{ width: 1, height: 16, background: 'rgba(255,255,255,0.14)' }} />
+          )}
+        </div>
 
-          <button className="time-btn" onClick={() => handleStep(-HOUR_MS)}>
-            &laquo; -1h
-          </button>
-          <button className="time-btn" onClick={() => handleStep(-10 * 60 * 1000)}>
-            &lsaquo; -10m
-          </button>
-          <button className="time-btn" onClick={() => handleStep(10 * 60 * 1000)}>
-            +10m &rsaquo;
-          </button>
-          <button className="time-btn" onClick={() => handleStep(HOUR_MS)}>
-            +1h &raquo;
-          </button>
-          <button className="time-btn" onClick={() => handleStep(-DAY_MS)}>
-            -1d
-          </button>
-          <button className="time-btn" onClick={() => handleStep(DAY_MS)}>
-            +1d
-          </button>
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: isMobile ? 4 : 8,
+            flexWrap: 'wrap',
+            marginTop: isMobile ? 8 : 0,
+          }}
+        >
+          {(
+            [
+              ['« -1h', -HOUR_MS],
+              ['‹ -10m', -10 * 60 * 1000],
+              ['+10m ›', 10 * 60 * 1000],
+              ['+1h »', HOUR_MS],
+              ['-1d', -DAY_MS],
+              ['+1d', DAY_MS],
+            ] as const
+          ).map(([label, deltaMs]) => (
+            <button
+              key={label}
+              className="time-btn"
+              onClick={() => handleStep(deltaMs)}
+              style={isMobile ? { padding: '0 6px', fontSize: 12 } : undefined}
+            >
+              {label}
+            </button>
+          ))}
         </div>
       </div>
 

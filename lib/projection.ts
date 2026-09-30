@@ -48,17 +48,15 @@ const TAN_45_DEG = Math.tan(45 * DEG2RAD); // == 1, kept explicit to match the p
  *
  * Returns null for anything below the horizon (altitude < 0).
  */
-export function projectAltAz(
-  { altitudeDeg, azimuthDeg }: AltAzInput,
+function projectRaw(
+  altitudeDeg: number,
+  azimuthDeg: number,
   canvasSize: CanvasSize,
-  rotationDeg = 0
-): ProjectedPoint | null {
-  if (altitudeDeg < 0) return null;
-
-  const alt = Math.min(90, altitudeDeg);
+  rotationDeg: number
+): ProjectedPoint {
   const radius = getSkyRadius(canvasSize);
 
-  const zenithAngleRad = ((90 - alt) / 2) * DEG2RAD;
+  const zenithAngleRad = ((90 - altitudeDeg) / 2) * DEG2RAD;
   const r = (radius * Math.tan(zenithAngleRad)) / TAN_45_DEG;
 
   const azRad = (azimuthDeg - rotationDeg) * DEG2RAD;
@@ -66,4 +64,29 @@ export function projectAltAz(
   const y = canvasSize.height / 2 - r * Math.cos(azRad);
 
   return { x, y };
+}
+
+export function projectAltAz(
+  { altitudeDeg, azimuthDeg }: AltAzInput,
+  canvasSize: CanvasSize,
+  rotationDeg = 0
+): ProjectedPoint | null {
+  if (altitudeDeg < 0) return null;
+  return projectRaw(Math.min(90, altitudeDeg), azimuthDeg, canvasSize, rotationDeg);
+}
+
+/**
+ * Same projection as projectAltAz, but never returns null and never clips
+ * negative altitude to the horizon - a below-horizon point lands outside the
+ * horizon circle, at a radius that grows as altitude drops further below 0.
+ * For effects that need a geometrically correct off-screen anchor (e.g. the
+ * twilight gradient's center when the sun is below the horizon), not for
+ * anything actually drawn as a visible sky object.
+ */
+export function projectAltAzUnclamped(
+  { altitudeDeg, azimuthDeg }: AltAzInput,
+  canvasSize: CanvasSize,
+  rotationDeg = 0
+): ProjectedPoint {
+  return projectRaw(altitudeDeg, azimuthDeg, canvasSize, rotationDeg);
 }

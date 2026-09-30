@@ -1,14 +1,22 @@
 'use client';
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import * as Astronomy from 'astronomy-engine';
 import { computeAltAz, computeStarAltAz, type AltAz, type CatalogStarRecord } from '@/lib/sky';
-import { getSkyRadius, projectAltAz, type ProjectedPoint } from '@/lib/projection';
+import {
+  getSkyRadius,
+  projectAltAz,
+  projectAltAzUnclamped,
+  type ProjectedPoint,
+} from '@/lib/projection';
 import {
   LABELED_STAR_NAMES,
   STAR_LABEL_MIN_ALTITUDE_DEG,
   CONSTELLATION_LABEL_MIN_VISIBLE_FRACTION,
 } from '@/lib/labels';
+import { bvToRgb, rgbToCss, type RGB } from '@/lib/starColor';
+import { effectiveMagnitude, horizonFadeFactor } from '@/lib/extinction';
+import { twilightGradientForAltitude, horizonGlowAlpha, horizonGlowColor } from '@/lib/twilight';
 
 interface StarCatalogFile {
   epoch: number;
@@ -39,7 +47,8 @@ interface MilkyWayFile {
 interface RenderStar {
   altitudeDeg: number;
   azimuthDeg: number;
-  mag: number;
+  effectiveMag: number;
+  color: RGB;
 }
 
 interface ConstellationSegment {
@@ -100,6 +109,13 @@ interface ScenePointerTarget {
   altAzPoints: AltAz[];
 }
 
+interface RenderStats {
+  frameMs: number;
+  recomputeMs: number;
+  starCount: number;
+  aboveHorizonStarCount: number;
+}
+
 const BACKGROUND_COLOR = '#02030a';
 const HORIZON_COLOR = 'rgba(255, 255, 255, 0.08)';
 const CARDINAL_COLOR = 'rgba(255, 255, 255, 0.35)';
@@ -111,7 +127,8 @@ const CARDINALS: Array<[string, number]> = [
   ['W', 270],
 ];
 
-const CONSTELLATION_LINE_COLOR = 'rgba(120, 170, 255, 0.22)';
+const CONSTELLATION_LINE_RGB = '120, 170, 255';
+const CONSTELLATION_LINE_BASE_ALPHA = 0.22;
 const CONSTELLATION_LINE_WIDTH = 0.6;
 
 const STAR_LABEL_COLOR = 'rgba(232, 236, 245, 0.55)';
@@ -128,6 +145,14 @@ const MILKY_WAY_POINTER_LABEL = 'Milky Way';
 const MILKY_WAY_ALPHAS = [0.02, 0.035, 0.05, 0.07, 0.09];
 const MILKY_WAY_BELOW_HORIZON_SKIP_FRACTION = 0.5;
 const MILKY_WAY_BRIGHTEST_ALPHA = MILKY_WAY_ALPHAS[MILKY_WAY_ALPHAS.length - 1];
+const MILKY_WAY_TINT: RGB = { r: 255, g: 248, b: 235 };
+const MILKY_WAY_GLOW_ALPHAS = new Set(MILKY_WAY_ALPHAS.slice(-2)); // two brightest bands
+const MILKY_WAY_GLOW_ALPHA_SCALE = 0.5;
+const MILKY_WAY_GLOW_BLUR_PX = 2;
+
+const STAR_GLOW_MAG_THRESHOLD = 1.5;
+const STAR_GLOW_ALPHA = 0.35;
+const STAR_GLOW_RADIUS_SCALE = 4;
 
 const PLANET_BODIES = [
   Astronomy.Body.Mercury,
@@ -166,6 +191,7 @@ const MOON_RADIUS_PX = 6;
 const TARGET_FPS = 30;
 const RECOMPUTE_THROTTLE_MS = 1000 / TARGET_FPS;
 const RECOMPUTE_WARN_MS = 33;
+const RECOMPUTE_SESSION_WARN_MS = 25;
 
 function magnitudeToRadiusPx(mag: number): number {
   return Math.max(0.4, 1.6 * Math.pow(2.512, (6.5 - mag) * 0.28));
@@ -193,6 +219,62 @@ function projectCentroid(
   }
   if (count === 0) return null;
   return { x: sumX / count, y: sumY / count };
+}
+
+/** Projected radius (px from center) at a given altitude, ignoring azimuth/rotation. */
+function radiusForAltitude(altitudeDeg: number, canvasSize: { width: number; height: number }): number {
+  const point = projectAltAz({ altitudeDeg, azimuthDeg: 0 }, canvasSize, 0);
+  if (!point) return getSkyRadius(canvasSize);
+  return Math.hypot(point.x - canvasSize.width / 2, point.y - canvasSize.height / 2);
+}
+
+/**
+ * Paints the sun-centered twilight gradient (civil/nautical/astronomical,
+ * smoothly interpolated - see lib/twilight.ts) plus an independent horizon
+ * glow for the astronomical range. No-op (leaves the plain night background)
+ * outside the (-18, +5] sun-altitude window.
+ */
+function drawTwilightGradient(
+  ctx: CanvasRenderingContext2D,
+  sun: AltAz,
+  canvasSize: { width: number; height: number },
+  rotationDeg: number
+) {
+  const stops = twilightGradientForAltitude(sun.altitudeDeg);
+  if (stops) {
+    // Below-horizon sun still needs a real off-canvas anchor so the glow
+    // emanates from the correct compass direction while scrubbing through dusk.
+    const center = projectAltAzUnclamped(sun, canvasSize, rotationDeg);
+    const outerRadius = Math.hypot(canvasSize.width, canvasSize.height);
+    const gradient = ctx.createRadialGradient(
+      center.x,
+      center.y,
+      0,
+      center.x,
+      center.y,
+      outerRadius
+    );
+    gradient.addColorStop(0, rgbToCss(stops.innerColor, stops.innerAlpha));
+    gradient.addColorStop(1, rgbToCss(stops.outerColor, 1));
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, canvasSize.width, canvasSize.height);
+  }
+
+  const glowAlpha = horizonGlowAlpha(sun.altitudeDeg);
+  if (glowAlpha > 0.001) {
+    const centerX = canvasSize.width / 2;
+    const centerY = canvasSize.height / 2;
+    const horizonR = getSkyRadius(canvasSize);
+    const innerR = radiusForAltitude(15, canvasSize);
+    const color = horizonGlowColor();
+    const glowGradient = ctx.createRadialGradient(centerX, centerY, innerR, centerX, centerY, horizonR);
+    glowGradient.addColorStop(0, rgbToCss(color, 0));
+    glowGradient.addColorStop(1, rgbToCss(color, glowAlpha));
+    ctx.fillStyle = glowGradient;
+    ctx.beginPath();
+    ctx.arc(centerX, centerY, horizonR, 0, Math.PI * 2);
+    ctx.fill();
+  }
 }
 
 /**
@@ -256,6 +338,7 @@ interface SkyCanvasProps {
   rotationDeg: number;
   labelsEnabled: boolean;
   scenePointerOpacity: number;
+  statsEnabled?: boolean;
 }
 
 export default function SkyCanvas({
@@ -264,8 +347,10 @@ export default function SkyCanvas({
   rotationDeg,
   labelsEnabled,
   scenePointerOpacity,
+  statsEnabled = false,
 }: SkyCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [stats, setStats] = useState<RenderStats | null>(null);
 
   // Latest controlled props, read by the rAF loop (not a recompute trigger by
   // itself - a React re-render never forces a recompute/redraw).
@@ -308,6 +393,19 @@ export default function SkyCanvas({
   const labeledStarsRef = useRef<LabeledStar[] | null>(null);
   const constellationLabelsRef = useRef<ConstellationLabel[] | null>(null);
   const scenePointerTargetsRef = useRef<ScenePointerTarget[] | null>(null);
+  const aboveHorizonStarCountRef = useRef(0);
+
+  // Cached blurred-glow bitmap for the 2 brightest Milky Way bands.
+  // Regenerated only when the underlying projected geometry could have
+  // changed (a new recompute, a resize, or a rotation change) - not per frame.
+  const milkyWayGlowCacheRef = useRef<{ key: string; canvas: HTMLCanvasElement } | null>(null);
+  const recomputeGenerationRef = useRef(0);
+
+  const statsEnabledRef = useRef(statsEnabled);
+  const lastRecomputeMsRef = useRef(0);
+  useEffect(() => {
+    statsEnabledRef.current = statsEnabled;
+  }, [statsEnabled]);
 
   useEffect(() => {
     let cancelled = false;
@@ -315,6 +413,7 @@ export default function SkyCanvas({
     if (!canvas) return;
 
     function draw() {
+      const frameStart = performance.now();
       const stars = starsRef.current;
       const constellationSegments = constellationSegmentsRef.current;
       const milkyWayRings = milkyWayRingsRef.current;
@@ -360,6 +459,9 @@ export default function SkyCanvas({
       ctx.fillStyle = BACKGROUND_COLOR;
       ctx.fillRect(0, 0, width, height);
 
+      // 1b. Twilight gradient (dawn/dusk), painted before any sky content
+      drawTwilightGradient(ctx, sun, canvasSize, rotation);
+
       // 2. Milky Way (additive so overlapping bands brighten toward the core)
       ctx.globalCompositeOperation = 'lighter';
       for (const ring of milkyWayRings) {
@@ -371,26 +473,88 @@ export default function SkyCanvas({
           else ctx.lineTo(point.x, point.y);
         });
         ctx.closePath();
-        ctx.fillStyle = `rgba(255, 255, 255, ${ring.alpha})`;
+        ctx.fillStyle = rgbToCss(MILKY_WAY_TINT, ring.alpha);
         ctx.fill();
+      }
+
+      // 2b. Soft blurred glow for the 2 brightest bands, cached per
+      // {recompute generation, canvas size, rotation}.
+      const glowKey = `${recomputeGenerationRef.current}:${width}x${height}:${rotation}`;
+      let glowCanvas =
+        milkyWayGlowCacheRef.current?.key === glowKey ? milkyWayGlowCacheRef.current.canvas : null;
+      if (!glowCanvas) {
+        const brightRings = milkyWayRings.filter((r) => MILKY_WAY_GLOW_ALPHAS.has(r.alpha));
+        if (brightRings.length > 0) {
+          const off = document.createElement('canvas');
+          off.width = width;
+          off.height = height;
+          const offCtx = off.getContext('2d');
+          if (offCtx) {
+            offCtx.globalCompositeOperation = 'lighter';
+            for (const ring of brightRings) {
+              offCtx.beginPath();
+              ring.vertices.forEach((altAz, i) => {
+                const point = projectAltAz(altAz, canvasSize, rotation);
+                if (!point) return;
+                if (i === 0) offCtx.moveTo(point.x, point.y);
+                else offCtx.lineTo(point.x, point.y);
+              });
+              offCtx.closePath();
+              offCtx.fillStyle = rgbToCss(MILKY_WAY_TINT, ring.alpha * MILKY_WAY_GLOW_ALPHA_SCALE);
+              offCtx.fill();
+            }
+            glowCanvas = off;
+            milkyWayGlowCacheRef.current = { key: glowKey, canvas: off };
+          }
+        }
+      }
+      if (glowCanvas) {
+        ctx.filter = `blur(${MILKY_WAY_GLOW_BLUR_PX}px)`;
+        ctx.drawImage(glowCanvas, 0, 0);
+        ctx.filter = 'none';
       }
       ctx.globalCompositeOperation = 'source-over';
 
-      // 3. Constellation lines
-      ctx.strokeStyle = CONSTELLATION_LINE_COLOR;
+      // 3. Constellation lines, faded individually near the horizon
       ctx.lineWidth = CONSTELLATION_LINE_WIDTH;
-      ctx.beginPath();
       for (const segment of constellationSegments) {
         const pa = projectAltAz(segment.a, canvasSize, rotation);
         const pb = projectAltAz(segment.b, canvasSize, rotation);
         if (!pa || !pb) continue;
+        const fade = Math.min(
+          horizonFadeFactor(segment.a.altitudeDeg),
+          horizonFadeFactor(segment.b.altitudeDeg)
+        );
+        if (fade <= 0) continue;
+        ctx.strokeStyle = `rgba(${CONSTELLATION_LINE_RGB}, ${CONSTELLATION_LINE_BASE_ALPHA * fade})`;
+        ctx.beginPath();
         ctx.moveTo(pa.x, pa.y);
         ctx.lineTo(pb.x, pb.y);
+        ctx.stroke();
       }
-      ctx.stroke();
 
-      // 4. Stars
-      ctx.fillStyle = '#ffffff';
+      // 4. Stars: glow pass first (batched, additive), then points, both
+      // colored from B-V and sized/faded from extinction-adjusted magnitude.
+      ctx.globalCompositeOperation = 'lighter';
+      for (const star of stars) {
+        if (star.effectiveMag >= STAR_GLOW_MAG_THRESHOLD) continue;
+        const point = projectAltAz(
+          { altitudeDeg: star.altitudeDeg, azimuthDeg: star.azimuthDeg },
+          canvasSize,
+          rotation
+        );
+        if (!point) continue;
+        const glowRadius = magnitudeToRadiusPx(star.effectiveMag) * STAR_GLOW_RADIUS_SCALE;
+        const gradient = ctx.createRadialGradient(point.x, point.y, 0, point.x, point.y, glowRadius);
+        gradient.addColorStop(0, rgbToCss(star.color, STAR_GLOW_ALPHA));
+        gradient.addColorStop(1, rgbToCss(star.color, 0));
+        ctx.fillStyle = gradient;
+        ctx.beginPath();
+        ctx.arc(point.x, point.y, glowRadius, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.globalCompositeOperation = 'source-over';
+
       for (const star of stars) {
         const point = projectAltAz(
           { altitudeDeg: star.altitudeDeg, azimuthDeg: star.azimuthDeg },
@@ -399,9 +563,10 @@ export default function SkyCanvas({
         );
         if (!point) continue;
 
-        ctx.globalAlpha = magnitudeToAlpha(star.mag);
+        ctx.globalAlpha = magnitudeToAlpha(star.effectiveMag);
+        ctx.fillStyle = rgbToCss(star.color, 1);
         ctx.beginPath();
-        ctx.arc(point.x, point.y, magnitudeToRadiusPx(star.mag), 0, Math.PI * 2);
+        ctx.arc(point.x, point.y, magnitudeToRadiusPx(star.effectiveMag), 0, Math.PI * 2);
         ctx.fill();
       }
       ctx.globalAlpha = 1;
@@ -545,9 +710,20 @@ export default function SkyCanvas({
         const y = centerY - labelRadius * Math.cos(azRad);
         ctx.fillText(label, x, y);
       }
+
+      if (statsEnabledRef.current) {
+        const frameMs = performance.now() - frameStart;
+        setStats({
+          frameMs,
+          recomputeMs: lastRecomputeMsRef.current,
+          starCount: stars.length,
+          aboveHorizonStarCount: aboveHorizonStarCountRef.current,
+        });
+      }
     }
 
     let hasLoggedInitialStats = false;
+    let hasLoggedSessionSlowWarning = false;
 
     function recompute(currentDateUtc: Date, currentObserver: Astronomy.Observer) {
       const starsCatalog = starsCatalogRef.current;
@@ -565,11 +741,18 @@ export default function SkyCanvas({
       const starAltAzById = new Map<number, AltAz>();
       const starsRender: RenderStar[] = new Array(starsCatalog.length);
       const labeledStars: LabeledStar[] = [];
+      let aboveHorizonCount = 0;
       for (let i = 0; i < starsCatalog.length; i++) {
         const star = starsCatalog[i];
         const altAz = computeStarAltAz(star, currentObserver, currentDateUtc);
         starAltAzById.set(star.id, altAz);
-        starsRender[i] = { altitudeDeg: altAz.altitudeDeg, azimuthDeg: altAz.azimuthDeg, mag: star.mag };
+        if (altAz.altitudeDeg >= 0) aboveHorizonCount++;
+        starsRender[i] = {
+          altitudeDeg: altAz.altitudeDeg,
+          azimuthDeg: altAz.azimuthDeg,
+          effectiveMag: effectiveMagnitude(star.mag, altAz.altitudeDeg),
+          color: bvToRgb(star.ci),
+        };
         const labelName = labeledStarIds.get(star.id);
         if (labelName && altAz.altitudeDeg >= STAR_LABEL_MIN_ALTITUDE_DEG) {
           labeledStars.push({ name: labelName, altAz });
@@ -577,6 +760,7 @@ export default function SkyCanvas({
       }
       starsRef.current = starsRender;
       labeledStarsRef.current = labeledStars;
+      aboveHorizonStarCountRef.current = aboveHorizonCount;
 
       const segments: ConstellationSegment[] = [];
       const constellationLabels: ConstellationLabel[] = [];
@@ -628,6 +812,7 @@ export default function SkyCanvas({
         milkyWayRings.push({ alpha: rawRing.alpha, vertices: clamped });
       }
       milkyWayRingsRef.current = milkyWayRings;
+      recomputeGenerationRef.current += 1;
 
       const scenePointerTargets: ScenePointerTarget[] = [];
       for (const name of SCENE_POINTER_NAMES) {
@@ -649,12 +834,13 @@ export default function SkyCanvas({
         const mag = Astronomy.Illumination(body, astroTime).mag;
         planetLogLines.push(`${body}: altitude ${altAz.altitudeDeg.toFixed(2)} deg, mag ${mag.toFixed(2)}`);
         if (altAz.altitudeDeg < 0 || mag > PLANET_MAGNITUDE_LIMIT) continue;
+        const effMag = effectiveMagnitude(mag, altAz.altitudeDeg);
         planets.push({
           name: body,
           altitudeDeg: altAz.altitudeDeg,
           azimuthDeg: altAz.azimuthDeg,
           color: PLANET_COLORS[body] ?? '#ffffff',
-          radiusPx: magnitudeToRadiusPx(mag) * PLANET_SIZE_SCALE,
+          radiusPx: magnitudeToRadiusPx(effMag) * PLANET_SIZE_SCALE,
         });
       }
       planetsRef.current = planets;
@@ -672,10 +858,17 @@ export default function SkyCanvas({
       };
 
       const elapsed = performance.now() - start;
+      lastRecomputeMsRef.current = elapsed;
       if (elapsed > RECOMPUTE_WARN_MS) {
         console.warn(
           `Sky recompute took ${elapsed.toFixed(1)}ms (budget ${RECOMPUTE_WARN_MS}ms for ${TARGET_FPS}fps) - may need a Web Worker (see prompt 6).`
         );
+      }
+      if (elapsed > RECOMPUTE_SESSION_WARN_MS && !hasLoggedSessionSlowWarning) {
+        console.warn(
+          `Sky recompute exceeded ${RECOMPUTE_SESSION_WARN_MS}ms (${elapsed.toFixed(1)}ms) on this device - logged once per session.`
+        );
+        hasLoggedSessionSlowWarning = true;
       }
 
       if (!hasLoggedInitialStats) {
@@ -819,5 +1012,32 @@ export default function SkyCanvas({
     };
   }, []);
 
-  return <canvas ref={canvasRef} className="block h-screen w-screen" />;
+  return (
+    <>
+      <canvas ref={canvasRef} className="block h-screen w-screen" />
+      {statsEnabled && stats && (
+        <div
+          style={{
+            position: 'fixed',
+            bottom: 96,
+            left: 16,
+            zIndex: 10,
+            fontSize: 11,
+            fontFamily: 'monospace',
+            color: 'rgba(232, 236, 245, 0.75)',
+            background: 'rgba(8, 10, 20, 0.72)',
+            padding: '6px 8px',
+            lineHeight: 1.5,
+            pointerEvents: 'none',
+          }}
+        >
+          <div>frame: {stats.frameMs.toFixed(1)}ms</div>
+          <div>recompute: {stats.recomputeMs.toFixed(1)}ms</div>
+          <div>
+            stars: {stats.aboveHorizonStarCount}/{stats.starCount} above horizon
+          </div>
+        </div>
+      )}
+    </>
+  );
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { getSkyRadius, projectAltAz } from './projection';
+import { getSkyRadius, projectAltAz, projectAltAzUnclamped } from './projection';
 
 const CANVAS = { width: 800, height: 600 };
 const R = getSkyRadius(CANVAS);
@@ -63,5 +63,26 @@ describe('projectAltAz', () => {
     const point = projectAltAz({ altitudeDeg: 30, azimuthDeg: 15 }, CANVAS, 123);
     const expected = projectAltAz({ altitudeDeg: 30, azimuthDeg: 15 }, CANVAS, 0);
     expect(distanceFromCenter(point!)).toBeCloseTo(distanceFromCenter(expected!), 9);
+  });
+});
+
+describe('projectAltAzUnclamped', () => {
+  it('matches projectAltAz above the horizon', () => {
+    const a = projectAltAz({ altitudeDeg: 30, azimuthDeg: 200 }, CANVAS, 10);
+    const b = projectAltAzUnclamped({ altitudeDeg: 30, azimuthDeg: 200 }, CANVAS, 10);
+    expect(b).toEqual(a);
+  });
+
+  it('never returns null, and projects below-horizon points further out than the horizon circle', () => {
+    const point = projectAltAzUnclamped({ altitudeDeg: -18, azimuthDeg: 0 }, CANVAS);
+    expect(point).not.toBeNull();
+    expect(distanceFromCenter(point)).toBeGreaterThan(R);
+  });
+
+  it('keeps the below-horizon point in the correct compass direction', () => {
+    const point = projectAltAzUnclamped({ altitudeDeg: -10, azimuthDeg: 90 }, CANVAS);
+    // az=90 (east) should still be to the right, at the vertical center.
+    expect(point.x).toBeGreaterThan(centerX);
+    expect(point.y).toBeCloseTo(centerY, 6);
   });
 });

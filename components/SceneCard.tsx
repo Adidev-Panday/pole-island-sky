@@ -1,6 +1,7 @@
 'use client';
 
 import { CARD_FADE_MS } from '@/hooks/useSceneController';
+import { useIsMobile } from '@/hooks/useIsMobile';
 
 interface SceneCardProps {
   visible: boolean;
@@ -10,6 +11,7 @@ interface SceneCardProps {
 }
 
 export default function SceneCard({ visible, faded, line3Visible, onDismiss }: SceneCardProps) {
+  const isMobile = useIsMobile();
   if (!visible) return null;
 
   return (
@@ -43,22 +45,28 @@ export default function SceneCard({ visible, faded, line3Visible, onDismiss }: S
           fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
         }}
       >
-        <div style={{ fontSize: 13, color: 'rgba(232, 236, 245, 0.6)', marginBottom: 14 }}>
+        <div
+          style={{
+            fontSize: isMobile ? 11 : 13,
+            color: 'rgba(232, 236, 245, 0.6)',
+            marginBottom: isMobile ? 10 : 14,
+          }}
+        >
           Casco Bay, Maine
         </div>
         <div
           style={{
-            fontSize: 32,
+            fontSize: isMobile ? 22 : 32,
             fontFamily: 'Georgia, "Times New Roman", serif',
             color: '#e8ecf5',
-            marginBottom: 22,
+            marginBottom: isMobile ? 16 : 22,
           }}
         >
           1:30 in the morning, mid-August
         </div>
         <div
           style={{
-            fontSize: 14,
+            fontSize: isMobile ? 12 : 14,
             color: 'rgba(232, 236, 245, 0.6)',
             maxWidth: 480,
             lineHeight: 1.6,
@@ -75,8 +83,9 @@ export default function SceneCard({ visible, faded, line3Visible, onDismiss }: S
             bottom: 20,
             left: 0,
             right: 0,
-            fontSize: 11,
+            fontSize: isMobile ? 10 : 11,
             color: 'rgba(232, 236, 245, 0.4)',
+            padding: '0 24px',
           }}
         >
           After Alan Lightman, <em>Searching for Stars on an Island in Maine</em> (2018)

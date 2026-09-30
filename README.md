@@ -5,15 +5,17 @@ Bay, Maine, in *Searching for Stars on an Island in Maine* (2018).
 
 ## Status
 
-This is prompt 5 of a planned 7: the Lightman framing. "The Moment" now
-triggers a scripted opening (attribution card, then pointers to the Summer
-Triangle + Polaris + the Milky Way's densest arc); bright stars and
-above-horizon constellations get labels (toggle top-right); a bottom-right
-compass dial rotates the whole sky around zenith; a subtle bottom vignette
-suggests the boat; an About panel credits sources. `data/passages.json`
-holds placeholder (paraphrase) excerpts, not yet wired into any UI — real
-quotes are the user's to supply. Location is still fixed at `POLE_ISLAND`;
-star colors and atmospheric extinction/twilight come later.
+This is prompt 6 of a planned 7: visual polish. Stars are colored from their
+B-V index, bright stars (mag &lt; 1.5) get a soft glow, atmospheric
+extinction dims everything toward the horizon (stars/planets/constellation
+lines), and a smoothly-interpolated twilight gradient paints the sky when
+the sun is within 5&deg; above to 18&deg; below the horizon. The Milky Way
+got a warm tint and a cached, blurred glow layer for its two brightest
+bands. The whole UI is now responsive down to iPhone SE width (collapsible
+info readout, a "More" dropdown for the less-common presets, a smaller
+bottom-left compass, icon-sized top-right controls). A `?stats=1` overlay
+shows live frame/recompute time and star counts. Location is still fixed at
+`POLE_ISLAND`; only deployment (prompt 7) remains after this.
 
 ## Stack
 
@@ -67,6 +69,15 @@ npm run build:data   # runs build:stars, build:constellations, build:milkyway in
   unit-tested in `lib/projection.test.ts`
 - `lib/labels.ts` — the curated always-labeled star list and label
   thresholds (star altitude, constellation visible-fraction)
+- `lib/starColor.ts` — `bvToRgb`, a piecewise-linear B-V &rarr; RGB
+  approximation, unit-tested (including against real HYG catalog B-V values
+  for Vega/Betelgeuse/Arcturus, cross-checked by sampling actual rendered
+  canvas pixels, not just the math in isolation)
+- `lib/extinction.ts` — `effectiveMagnitude` (Kasten &amp; Young 1989
+  airmass model, 0.28 mag/airmass) and `horizonFadeFactor`, used to dim
+  stars/planets/constellation lines toward the horizon
+- `lib/twilight.ts` — `twilightGradientForAltitude` and `horizonGlowAlpha`,
+  smoothly interpolating the dawn/dusk sky gradient across sun altitude
 - `scripts/lib/cache.ts` — shared download/cache helper used by all three
   build scripts below
 - `scripts/build-star-catalog.ts` — downloads/caches HYG v4.1, filters to
@@ -79,19 +90,31 @@ npm run build:data   # runs build:stars, build:constellations, build:milkyway in
   `public/data/constellations.json`
 - `scripts/build-milkyway.ts` — downloads/caches d3-celestial's `mw.json`,
   copies it verbatim to `public/data/mw.json`
-- `components/SkyCanvas.tsx` — full-viewport, DPR-aware canvas: Milky Way,
-  constellation lines, stars, planets, Sun, Moon (with phase), star +
-  constellation labels, scene-opening pointers, horizon circle + cardinal
-  labels — all rotate together via `rotationDeg`. Controlled (`dateUtc` +
-  `observer` + `rotationDeg` + `labelsEnabled` + `scenePointerOpacity`
-  props); astronomy recompute runs in a throttled (30/sec)
-  `requestAnimationFrame` loop, but rotation/labels/pointer-opacity changes
-  trigger an unthrottled reprojection-only redraw (no astronomy recompute)
+- `components/SkyCanvas.tsx` — full-viewport, DPR-aware canvas: background,
+  twilight gradient, Milky Way (tinted, with a cached blurred-glow layer for
+  the 2 brightest bands), constellation lines (per-segment horizon fade),
+  stars (B-V colored, extinction-dimmed, glow pass for mag &lt; 1.5),
+  planets, Sun, Moon (with phase), star + constellation labels, scene
+  pointers, horizon circle + cardinal labels — all rotate together via
+  `rotationDeg`. Controlled (`dateUtc` + `observer` + `rotationDeg` +
+  `labelsEnabled` + `scenePointerOpacity` + `statsEnabled` props); astronomy
+  recompute runs in a throttled (30/sec) `requestAnimationFrame` loop, but
+  rotation/labels/pointer-opacity changes trigger an unthrottled
+  reprojection-only redraw (no astronomy recompute). `?stats=1` shows a
+  small frame-time/recompute-time/star-count overlay; a recompute over 25ms
+  logs a console warning once per session
 - `components/TimeControls.tsx` — scrubber, date picker, presets, step
-  buttons, copy-link, and the top-left info readout
-- `components/CompassDial.tsx` — bottom-right rotation dial (drag to
-  rotate, snaps within 3&deg; of 0, Reset button)
-- `components/TopRightControls.tsx` — Labels toggle + About (&#9432;) button
+  buttons, copy-link, and the top-left info readout. Responsive: on narrow
+  screens the readout collapses to 3 lines (tap to expand), Sunset/
+  Astronomical dark/dawn move into a "More" dropdown, and the scrubber/date
+  input stack vertically
+- `components/CompassDial.tsx` — rotation dial (drag to rotate, snaps within
+  3&deg; of 0, Reset button); bottom-right at 60px on desktop, bottom-left
+  at 48px on narrow screens
+- `components/TopRightControls.tsx` — Labels toggle + About (&#9432;) button;
+  becomes 32x32 icon buttons on narrow screens
+- `hooks/useIsMobile.ts` — shared `matchMedia`-backed narrow-viewport check
+  used by the above plus `SceneCard`
 - `components/AboutPanel.tsx` — credits/attribution panel
 - `components/BoatVignette.tsx` — bottom gradient + abstract gunwale curve
 - `components/SceneCard.tsx` — the opening attribution card (hardcoded

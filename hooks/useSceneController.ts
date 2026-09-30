@@ -113,14 +113,19 @@ export function useSceneController(): SceneController {
   }, [clearTimers]);
 
   // Any user input while the scene is active cancels it immediately.
+  // touchstart is listed alongside pointerdown (not just relying on the
+  // latter covering touch too) because not every touch-emulation path
+  // dispatches a synthetic pointerdown for a touch.
   useEffect(() => {
     if (!active) return;
     const handleInteraction = () => cancel();
     window.addEventListener('pointerdown', handleInteraction);
+    window.addEventListener('touchstart', handleInteraction);
     window.addEventListener('keydown', handleInteraction);
     window.addEventListener('wheel', handleInteraction);
     return () => {
       window.removeEventListener('pointerdown', handleInteraction);
+      window.removeEventListener('touchstart', handleInteraction);
       window.removeEventListener('keydown', handleInteraction);
       window.removeEventListener('wheel', handleInteraction);
     };

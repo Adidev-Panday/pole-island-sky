@@ -17,7 +17,13 @@ export default function SkyExperience() {
   const [dateUtc, setDateUtc] = useState<Date>(() => new Date(REFERENCE_MOMENT));
   const [rotationDeg, setRotationDeg] = useState(0);
   const [labelsEnabled, setLabelsEnabled] = useState(true);
+  const [statsEnabled, setStatsEnabled] = useState(false);
   const scene = useSceneController();
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('stats') === '1') setStatsEnabled(true);
+  }, []);
 
   const observer = useMemo(
     () =>
@@ -60,6 +66,7 @@ export default function SkyExperience() {
         rotationDeg={rotationDeg}
         labelsEnabled={labelsEnabled}
         scenePointerOpacity={scene.pointerOpacity}
+        statsEnabled={statsEnabled}
       />
       <BoatVignette />
       <TimeControls
