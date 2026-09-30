@@ -87,9 +87,11 @@ export default function AboutPanel({ onClose }: AboutPanelProps) {
       </p>
 
       <p style={{ color: 'rgba(232, 236, 245, 0.5)', fontSize: 11, marginBottom: 4 }}>
-        Credits: astronomy-engine (MIT) &middot; HYG database (public domain) &middot;
-        Stellarium constellation figures (GPL-2, data table) &middot; d3-celestial Milky
-        Way outline (BSD-3).
+        Credits: astronomy-engine (MIT) &middot; HYG database v4.1, Astronexus &amp; David
+        Nash (CC BY-SA 4.0) &middot; Stellarium constellation figures (GPL-2, data
+        table) &middot; d3-celestial Milky Way outline, Olaf Frohn (BSD-3). Redistributed
+        data files keep their upstream licenses; see{' '}
+        <code style={{ fontSize: 10 }}>LICENSES/</code> in the repo.
       </p>
 
       <p style={{ fontSize: 12 }}>

@@ -1,29 +1,61 @@
-# Pole Island Sky Viewer
+# Pole Island Sky
 
-Recreates the night sky Alan Lightman describes from his island in Casco
-Bay, Maine, in *Searching for Stars on an Island in Maine* (2018).
+A pixel-accurate recreation of the night sky Alan Lightman describes from
+his island in Casco Bay, Maine, in *Searching for Stars on an Island in
+Maine* (2018) — real star positions, real planet positions, a real moon
+phase, scrubbable through time.
 
-## Status
+**Live**: not yet deployed from this environment (no GitHub/Vercel
+authentication available here) — see [Deploy](#deploy) below for the exact
+commands to finish it. Intended URL once DNS is attached:
+`https://pole-island.adidevpanday.com`.
 
-This is prompt 6 of a planned 7: visual polish. Stars are colored from their
-B-V index, bright stars (mag &lt; 1.5) get a soft glow, atmospheric
-extinction dims everything toward the horizon (stars/planets/constellation
-lines), and a smoothly-interpolated twilight gradient paints the sky when
-the sun is within 5&deg; above to 18&deg; below the horizon. The Milky Way
-got a warm tint and a cached, blurred glow layer for its two brightest
-bands. The whole UI is now responsive down to iPhone SE width (collapsible
-info readout, a "More" dropdown for the less-common presets, a smaller
-bottom-left compass, icon-sized top-right controls). A `?stats=1` overlay
-shows live frame/recompute time and star counts. Location is still fixed at
-`POLE_ISLAND`; only deployment (prompt 7) remains after this.
+![Screenshot](docs/screenshot.png)
+
+## What this is
+
+Everything renders from real astronomy: `astronomy-engine` for time and
+coordinate transforms, the HYG star catalog for ~8,900 naked-eye stars,
+Stellarium's constellation figures, and d3-celestial's Milky Way outline —
+the same kind of math underlying planetarium software, not an illustration.
+Location is a public proxy for Lightman's unnamed 30-acre island (he
+doesn't disclose which one); the date/time is scrubbable, with a scripted
+"The Moment" opening for the specific wee-hours scene the book describes.
+
+## Local development
+
+```bash
+npm install
+npm run build:data   # first time only - downloads/builds the star catalog, constellations, Milky Way
+npm run dev
+```
+
+Open http://localhost:3000 for the sky, http://localhost:3000/verify for
+the astronomy-accuracy verification table.
+
+```bash
+npm run build       # production build
+npm run lint         # ESLint
+npm run test          # Vitest
+npx tsc --noEmit       # type-check
+npm run build:data      # regenerate data/*.json + public/data/*.json from source
+```
+
+`build:data` (`build:stars` + `build:constellations` + `build:milkyway`)
+only needs to run again if you want to refresh from upstream (new HYG
+release, filter changes) — the generated files are committed, so a fresh
+clone already has them.
 
 ## Stack
 
 - Next.js 15 (App Router) + TypeScript + Tailwind + ESLint
-- [`astronomy-engine`](https://github.com/cosinekitty/astronomy) for all
-  time and coordinate transforms
-- [HYG star catalog v4.1](https://github.com/astronexus/HYG-Database)
-  (public domain), filtered to the naked-eye subset (mag &le; 6.5)
+- [`astronomy-engine`](https://github.com/cosinekitty/astronomy) (MIT) for
+  all time and coordinate transforms
+- [HYG star catalog v4.1](https://codeberg.org/astronexus/hyg) (Astronexus
+  / David Nash, **CC BY-SA 4.0** — not public domain, despite what an
+  earlier version of this README and this project's original spec assumed;
+  corrected after actually reading the license file), filtered to the
+  naked-eye subset (mag &le; 6.5)
 - Constellation line figures from
   [Stellarium](https://github.com/Stellarium/stellarium)'s modern skyculture
   (`skycultures/modern/constellationship.fab` +
@@ -31,23 +63,10 @@ shows live frame/recompute time and star counts. Location is still fixed at
   to a JSON format at a different path). GPL-2; a factual line-segment/name
   table, credited here per its license.
 - Milky Way outline from
-  [d3-celestial](https://github.com/ofrohn/d3-celestial)'s `data/mw.json`
-  (5 GeoJSON brightness contours, J2000 equatorial). BSD-3, credited here.
+  [d3-celestial](https://github.com/ofrohn/d3-celestial) (Olaf Frohn)
+  `data/mw.json` (5 GeoJSON brightness contours, J2000 equatorial). BSD-3.
 - Canvas 2D for rendering
 - Vitest for unit tests
-
-## First-time setup
-
-**Run this once before `npm run dev` or `npm run build`** — all generated
-data (`data/stars.json`, `data/constellations.json`,
-`public/data/{stars,constellations,mw}.json`) is committed, so a fresh
-clone already has it. Regenerate only if you need to (new HYG/Stellarium
-release, filter changes):
-
-```bash
-npm install
-npm run build:data   # runs build:stars, build:constellations, build:milkyway in order
-```
 
 ## Key files
 
@@ -60,105 +79,104 @@ npm run build:data   # runs build:stars, build:constellations, build:milkyway in
   override), `applyProperMotion` and `computeStarAltAz` for catalog stars,
   `computeLocalSiderealTime`, `moonPhaseName`
 - `lib/time.ts` — dependency-free `America/New_York` local-time helpers
-  (`formatLocalDate`, `formatLocalTime`, `formatZoneAbbreviation`,
-  `localMidnightUtc`), used by `TimeControls` for display and for the
-  Sunset/Astronomical dark/dawn presets' day-boundary searches
 - `lib/projection.ts` — zenith-centered stereographic projection (alt/az
-  &rarr; canvas pixels), with an optional `rotationDeg` (compass rotation,
-  applied per-point so text labels are never themselves rotated),
-  unit-tested in `lib/projection.test.ts`
-- `lib/labels.ts` — the curated always-labeled star list and label
-  thresholds (star altitude, constellation visible-fraction)
-- `lib/starColor.ts` — `bvToRgb`, a piecewise-linear B-V &rarr; RGB
-  approximation, unit-tested (including against real HYG catalog B-V values
-  for Vega/Betelgeuse/Arcturus, cross-checked by sampling actual rendered
-  canvas pixels, not just the math in isolation)
-- `lib/extinction.ts` — `effectiveMagnitude` (Kasten &amp; Young 1989
-  airmass model, 0.28 mag/airmass) and `horizonFadeFactor`, used to dim
-  stars/planets/constellation lines toward the horizon
-- `lib/twilight.ts` — `twilightGradientForAltitude` and `horizonGlowAlpha`,
-  smoothly interpolating the dawn/dusk sky gradient across sun altitude
-- `scripts/lib/cache.ts` — shared download/cache helper used by all three
-  build scripts below
-- `scripts/build-star-catalog.ts` — downloads/caches HYG v4.1, filters to
-  mag &le; 6.5, writes `data/stars.json` + `public/data/stars.json` +
-  `data/stars.meta.json`
-- `scripts/build-constellations.ts` — downloads/caches Stellarium's line
-  figures + names, cross-references HIP numbers against the HYG catalog's
-  `hip` column to resolve each line segment to the HYG `id`s used in
-  `data/stars.json`, writes `data/constellations.json` +
-  `public/data/constellations.json`
-- `scripts/build-milkyway.ts` — downloads/caches d3-celestial's `mw.json`,
-  copies it verbatim to `public/data/mw.json`
-- `components/SkyCanvas.tsx` — full-viewport, DPR-aware canvas: background,
-  twilight gradient, Milky Way (tinted, with a cached blurred-glow layer for
-  the 2 brightest bands), constellation lines (per-segment horizon fade),
-  stars (B-V colored, extinction-dimmed, glow pass for mag &lt; 1.5),
-  planets, Sun, Moon (with phase), star + constellation labels, scene
-  pointers, horizon circle + cardinal labels — all rotate together via
-  `rotationDeg`. Controlled (`dateUtc` + `observer` + `rotationDeg` +
-  `labelsEnabled` + `scenePointerOpacity` + `statsEnabled` props); astronomy
-  recompute runs in a throttled (30/sec) `requestAnimationFrame` loop, but
-  rotation/labels/pointer-opacity changes trigger an unthrottled
-  reprojection-only redraw (no astronomy recompute). `?stats=1` shows a
-  small frame-time/recompute-time/star-count overlay; a recompute over 25ms
-  logs a console warning once per session
-- `components/TimeControls.tsx` — scrubber, date picker, presets, step
-  buttons, copy-link, and the top-left info readout. Responsive: on narrow
-  screens the readout collapses to 3 lines (tap to expand), Sunset/
-  Astronomical dark/dawn move into a "More" dropdown, and the scrubber/date
-  input stack vertically
-- `components/CompassDial.tsx` — rotation dial (drag to rotate, snaps within
-  3&deg; of 0, Reset button); bottom-right at 60px on desktop, bottom-left
-  at 48px on narrow screens
-- `components/TopRightControls.tsx` — Labels toggle + About (&#9432;) button;
-  becomes 32x32 icon buttons on narrow screens
-- `hooks/useIsMobile.ts` — shared `matchMedia`-backed narrow-viewport check
-  used by the above plus `SceneCard`
-- `components/AboutPanel.tsx` — credits/attribution panel
-- `components/BoatVignette.tsx` — bottom gradient + abstract gunwale curve
-- `components/SceneCard.tsx` — the opening attribution card (hardcoded
-  text per the prompt 5 spec, not sourced from `data/passages.json` — see
-  below)
-- `hooks/useSceneController.ts` — drives "The Moment"'s scripted timeline
-  (card hold/fade, pointer fade-in/hold/fade-out); any `pointerdown` /
-  `keydown` / `wheel` while active cancels it immediately
-- `data/passages.json` — 3 placeholder (paraphrase) excerpts with a
-  `manual` / `sky-feature` trigger schema. Not yet consumed by any UI in
-  this prompt (the scene card's own text is hardcoded, matching the prompt's
-  literal Line 3/4 wording) — this is scaffolding for real quotes later
-- `components/SkyExperience.tsx` — owns `dateUtc`/`rotationDeg`/
-  `labelsEnabled` state and the scene controller, wires everything together,
-  and syncs `?t=<ISO>` in the URL (`history.replaceState`, read back on
-  mount)
-- `app/page.tsx` — renders `<SkyExperience />`
-- `app/verify/page.tsx` — the prompt-1 verification table (Polaris, Sun,
-  Moon, planets, local sidereal time), kept as an accuracy record, with
-  cross-checks and known prompt/reality mismatches noted in a comment
-
-## Development
-
-```bash
-npm install
-npm run dev
-```
-
-Open http://localhost:3000 for the sky view, http://localhost:3000/verify
-for the accuracy table. Check the browser console for planet altitudes,
-constellation segment counts, and Milky Way ring counts logged on load.
-
-```bash
-npm run build      # production build
-npm run lint       # ESLint
-npm run test       # Vitest (lib/projection.test.ts)
-npx tsc --noEmit    # type-check
-npm run build:data  # regenerate all generated data from source
-```
+  &rarr; canvas pixels), with `rotationDeg` (compass rotation) and an
+  unclamped variant for off-screen anchors, unit-tested
+- `lib/labels.ts` — curated always-labeled star list and label thresholds
+- `lib/starColor.ts` — `bvToRgb`, piecewise-linear B-V &rarr; RGB, unit-tested
+  and cross-checked against real rendered canvas pixels
+- `lib/extinction.ts` — atmospheric extinction (Kasten &amp; Young 1989) and
+  horizon-fade factor
+- `lib/twilight.ts` — smoothly-interpolated dawn/dusk sky gradient
+- `lib/ogImage.tsx` — shared JSX for the Open Graph / Twitter share images
+- `scripts/lib/cache.ts` — shared download/cache helper for the three
+  `build:*` scripts
+- `scripts/build-star-catalog.ts`, `build-constellations.ts`,
+  `build-milkyway.ts` — download/cache upstream data and write
+  `data/*.json` + `public/data/*.json`
+- `components/SkyCanvas.tsx` — the canvas: background, twilight gradient,
+  Milky Way, constellation lines, stars, planets, Sun, Moon, labels, scene
+  pointers, horizon circle. Astronomy recompute is throttled to 30/sec via
+  `requestAnimationFrame`; rotation/labels/pointer-opacity changes redraw
+  without recomputing. `?stats=1` shows a frame-time/recompute-time/star-count
+  overlay
+- `components/TimeControls.tsx`, `CompassDial.tsx`, `TopRightControls.tsx`,
+  `AboutPanel.tsx`, `BoatVignette.tsx`, `SceneCard.tsx` — UI chrome, all
+  responsive down to iPhone SE width
+- `hooks/useSceneController.ts` — drives "The Moment"'s scripted opening
+- `hooks/useIsMobile.ts` — shared narrow-viewport check
+- `data/passages.json` — 3 placeholder (paraphrase) excerpts, schema-ready
+  for real quotes; not yet wired into any UI (the scene card's text is
+  hardcoded per the spec that introduced it)
+- `components/SkyExperience.tsx` — owns app state, wires everything
+  together, syncs `?t=<ISO>` in the URL
+- `app/layout.tsx` — metadata (title/description/OpenGraph/Twitter/robots),
+  `viewport` (theme color)
+- `app/icon.tsx`, `apple-icon.tsx` — dynamic favicon (a single 4-point star)
+- `app/opengraph-image.tsx`, `twitter-image.tsx` — share-card images
+  (deterministic pseudo-random star field, fixed seed)
+- `app/sitemap.ts`, `robots.ts` — SEO routes
+- `app/verify/page.tsx` — the original astronomy-accuracy verification
+  table, kept as a running record with cross-checks and known
+  spec/reality mismatches noted in comments
 
 ## Deploy
 
-Deployment (Vercel) is out of scope until prompt 7. Once ready:
+This repo targets [Vercel](https://vercel.com) (Next.js autodetected, no
+custom build config beyond `vercel.json`'s cache headers for `/data/*.json`
+and `regions: ["iad1"]`). To finish deploying from scratch:
 
 ```bash
-npx vercel
+# 1. Push to GitHub (repo doesn't exist yet from this environment)
+gh repo create adipanday/pole-island-sky --public --source=. --push
+# (or create it manually on github.com and `git remote add origin <url> && git push -u origin main`)
+
+# 2. Install the Vercel CLI if you don't have it
+npm i -g vercel
+
+# 3. Log in and deploy
+vercel login
+vercel --prod   # first run asks for scope + project name; use "pole-island-sky"
 ```
+
+### Custom domain
+
+Once deployed, to attach `pole-island.adidevpanday.com`:
+
+1. At your DNS registrar, add: `CNAME pole-island cname.vercel-dns.com`
+2. `vercel domains add pole-island.adidevpanday.com`
+3. Verify propagation: `dig pole-island.adidevpanday.com CNAME`
+
+### Post-deploy checklist
+
+```bash
+curl -sI https://<your-deployment>/                          # expect 200, text/html
+curl -s  https://<your-deployment>/data/stars.json | jq '.count'  # expect 8920
+curl -sI https://<your-deployment>/opengraph-image             # expect 200, image/png
+curl -sI https://<your-deployment>/robots.txt                  # expect 200, body has "Sitemap:"
+npx lighthouse https://<your-deployment> --only-categories=performance,seo,accessibility \
+  --preset=mobile --output=json --output-path=./lighthouse.json --chrome-flags="--headless"
+```
+
+## License
+
+Code: MIT (see `LICENSE`). Redistributed data files under `data/` and
+`public/data/` keep their own upstream licenses — HYG (CC BY-SA 4.0),
+Stellarium constellation figures (GPL-2), d3-celestial Milky Way outline
+(BSD-3). Full texts and a per-file breakdown: [`LICENSES/`](LICENSES/).
+
+## Credits
+
+- [astronomy-engine](https://github.com/cosinekitty/astronomy) — Don Cross
+- [HYG star database](https://codeberg.org/astronexus/hyg) — Astronexus,
+  David Nash
+- [Stellarium](https://github.com/Stellarium/stellarium) constellation
+  figures
+- [d3-celestial](https://github.com/ofrohn/d3-celestial) Milky Way outline
+  — Olaf Frohn
+- Alan Lightman, *Searching for Stars on an Island in Maine* (2018) — the
+  book this whole thing is a tribute to
+
+---
+
+By Adi Panday for Dr. Alan Lightman, 2026.
