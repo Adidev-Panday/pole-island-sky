@@ -10,6 +10,58 @@ export interface AltAz {
   azimuthDeg: number;
 }
 
+/** A star from the compiled HYG catalog (see scripts/build-star-catalog.ts). */
+export interface CatalogStarRecord {
+  id: number;
+  ra: number; // hours, J2000
+  dec: number; // degrees, J2000
+  mag: number;
+  ci: number | null;
+  spect: string | null;
+  pmra: number | null; // mas/yr
+  pmdec: number | null; // mas/yr
+  proper: string | null;
+  bayer: string | null;
+  con: string | null;
+}
+
+const J2000_EPOCH_MS = Date.UTC(2000, 0, 1, 12, 0, 0);
+const MS_PER_JULIAN_YEAR = 365.25 * 86400 * 1000;
+
+/**
+ * Advances a catalog star's J2000 RA/Dec to the date of observation using
+ * its catalog proper motion. pmra is assumed to already include the cos(dec)
+ * factor (the standard Hipparcos/Gaia convention), so it's divided back out
+ * to get the actual change in RA angle.
+ */
+export function applyProperMotion(
+  star: CatalogStarRecord,
+  dateUtc: Date
+): CatalogStar {
+  if (star.pmra == null || star.pmdec == null) {
+    return { raHours: star.ra, decDegrees: star.dec };
+  }
+
+  const deltaYears = (dateUtc.getTime() - J2000_EPOCH_MS) / MS_PER_JULIAN_YEAR;
+  const decRad = (star.dec * Math.PI) / 180;
+
+  const raHours =
+    star.ra + (star.pmra * deltaYears) / (Math.cos(decRad) * 3600 * 1000 * 15);
+  const decDegrees = star.dec + (star.pmdec * deltaYears) / (3600 * 1000);
+
+  return { raHours, decDegrees };
+}
+
+/** Applies proper motion, then computes topocentric alt/az for a catalog star. */
+export function computeStarAltAz(
+  star: CatalogStarRecord,
+  observer: Astronomy.Observer,
+  dateUtc: Date
+): AltAz {
+  const ofDate = applyProperMotion(star, dateUtc);
+  return computeAltAz(ofDate, observer, dateUtc);
+}
+
 function isCatalogStar(
   target: Astronomy.Body | CatalogStar
 ): target is CatalogStar {

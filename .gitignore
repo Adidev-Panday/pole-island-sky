@@ -36,6 +36,9 @@ yarn-error.log*
 # vercel
 .vercel
 
+# star catalog build cache (raw HYG download, ~34MB; re-fetched by npm run build:stars)
+/scripts/.cache/
+
 # typescript
 *.tsbuildinfo
 next-env.d.ts
