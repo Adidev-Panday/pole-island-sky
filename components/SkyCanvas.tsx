@@ -3,7 +3,12 @@
 import { useEffect, useRef } from 'react';
 import * as Astronomy from 'astronomy-engine';
 import { computeAltAz, computeStarAltAz, type AltAz, type CatalogStarRecord } from '@/lib/sky';
-import { getSkyRadius, projectAltAz } from '@/lib/projection';
+import { getSkyRadius, projectAltAz, type ProjectedPoint } from '@/lib/projection';
+import {
+  LABELED_STAR_NAMES,
+  STAR_LABEL_MIN_ALTITUDE_DEG,
+  CONSTELLATION_LABEL_MIN_VISIBLE_FRACTION,
+} from '@/lib/labels';
 
 interface StarCatalogFile {
   epoch: number;
@@ -71,6 +76,30 @@ interface MilkyWayRawRing {
   points: [number, number][]; // [ra_deg, dec_deg]
 }
 
+// A constellation's raw (date-independent) line pairs, grouped by name so
+// its own visibility fraction / label centroid can be computed at recompute.
+interface ConstellationRaw {
+  name: string;
+  pairs: [number, number][];
+}
+
+interface LabeledStar {
+  name: string;
+  altAz: AltAz;
+}
+
+interface ConstellationLabel {
+  name: string;
+  aboveHorizonEndpoints: AltAz[]; // averaged (in projected space) for the label position
+}
+
+// A scene-opening pointer target. altAzPoints is a single point for a named
+// star, or many points (averaged in projected space) for the Milky Way arc.
+interface ScenePointerTarget {
+  label: string;
+  altAzPoints: AltAz[];
+}
+
 const BACKGROUND_COLOR = '#02030a';
 const HORIZON_COLOR = 'rgba(255, 255, 255, 0.08)';
 const CARDINAL_COLOR = 'rgba(255, 255, 255, 0.35)';
@@ -85,9 +114,20 @@ const CARDINALS: Array<[string, number]> = [
 const CONSTELLATION_LINE_COLOR = 'rgba(120, 170, 255, 0.22)';
 const CONSTELLATION_LINE_WIDTH = 0.6;
 
+const STAR_LABEL_COLOR = 'rgba(232, 236, 245, 0.55)';
+const STAR_LABEL_OFFSET_PX = 8; // NE of the star point (right + up)
+const CONSTELLATION_LABEL_COLOR = 'rgba(180, 200, 240, 0.35)';
+
+const SCENE_POINTER_LINE_COLOR = 'rgba(232, 236, 245, 0.6)';
+const SCENE_POINTER_LABEL_COLOR = 'rgba(232, 236, 245, 0.9)';
+const SCENE_POINTER_LINE_LENGTH_PX = 26;
+const SCENE_POINTER_NAMES = ['Vega', 'Deneb', 'Altair', 'Polaris'] as const;
+const MILKY_WAY_POINTER_LABEL = 'Milky Way';
+
 // Faintest to brightest of the 5 contour bands in mw.json (see build-milkyway.ts).
 const MILKY_WAY_ALPHAS = [0.02, 0.035, 0.05, 0.07, 0.09];
 const MILKY_WAY_BELOW_HORIZON_SKIP_FRACTION = 0.5;
+const MILKY_WAY_BRIGHTEST_ALPHA = MILKY_WAY_ALPHAS[MILKY_WAY_ALPHAS.length - 1];
 
 const PLANET_BODIES = [
   Astronomy.Body.Mercury,
@@ -133,6 +173,26 @@ function magnitudeToRadiusPx(mag: number): number {
 
 function magnitudeToAlpha(mag: number): number {
   return Math.min(1, Math.max(0.15, Math.pow(2.512, (6.5 - mag) * 0.18)));
+}
+
+/** Projects a set of alt/az points and averages the ones above horizon. */
+function projectCentroid(
+  altAzPoints: AltAz[],
+  canvasSize: { width: number; height: number },
+  rotationDeg: number
+): ProjectedPoint | null {
+  let sumX = 0;
+  let sumY = 0;
+  let count = 0;
+  for (const altAz of altAzPoints) {
+    const point = projectAltAz(altAz, canvasSize, rotationDeg);
+    if (!point) continue;
+    sumX += point.x;
+    sumY += point.y;
+    count++;
+  }
+  if (count === 0) return null;
+  return { x: sumX / count, y: sumY / count };
 }
 
 /**
@@ -193,28 +253,50 @@ function drawMoonPhase(
 interface SkyCanvasProps {
   dateUtc: Date;
   observer: Astronomy.Observer;
+  rotationDeg: number;
+  labelsEnabled: boolean;
+  scenePointerOpacity: number;
 }
 
-export default function SkyCanvas({ dateUtc, observer }: SkyCanvasProps) {
+export default function SkyCanvas({
+  dateUtc,
+  observer,
+  rotationDeg,
+  labelsEnabled,
+  scenePointerOpacity,
+}: SkyCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   // Latest controlled props, read by the rAF loop (not a recompute trigger by
-  // itself - a React re-render never forces a recompute).
+  // itself - a React re-render never forces a recompute/redraw).
   const dateRef = useRef(dateUtc);
   const observerRef = useRef(observer);
+  const rotationRef = useRef(rotationDeg);
+  const labelsEnabledRef = useRef(labelsEnabled);
+  const scenePointerOpacityRef = useRef(scenePointerOpacity);
   useEffect(() => {
     dateRef.current = dateUtc;
   }, [dateUtc]);
   useEffect(() => {
     observerRef.current = observer;
   }, [observer]);
+  useEffect(() => {
+    rotationRef.current = rotationDeg;
+  }, [rotationDeg]);
+  useEffect(() => {
+    labelsEnabledRef.current = labelsEnabled;
+  }, [labelsEnabled]);
+  useEffect(() => {
+    scenePointerOpacityRef.current = scenePointerOpacity;
+  }, [scenePointerOpacity]);
 
   // Raw, date-independent source data, loaded once on mount.
   const starsCatalogRef = useRef<CatalogStarRecord[] | null>(null);
   const starByIdRef = useRef<Map<number, CatalogStarRecord> | null>(null);
-  const constellationPairsRef = useRef<[number, number][] | null>(null);
-  const constellationCountRef = useRef(0);
+  const constellationsRawRef = useRef<ConstellationRaw[] | null>(null);
   const milkyWayRawRingsRef = useRef<MilkyWayRawRing[] | null>(null);
+  const labeledStarIdsRef = useRef<Map<number, string> | null>(null); // id -> proper name
+  const pointerStarIdsRef = useRef<Map<string, number> | null>(null); // proper name -> id
 
   // Rendered (projected-per-frame-ready) output of the most recent recompute.
   const starsRef = useRef<RenderStar[] | null>(null);
@@ -223,6 +305,9 @@ export default function SkyCanvas({ dateUtc, observer }: SkyCanvasProps) {
   const planetsRef = useRef<RenderPlanet[] | null>(null);
   const sunRef = useRef<AltAz | null>(null);
   const moonRef = useRef<RenderMoon | null>(null);
+  const labeledStarsRef = useRef<LabeledStar[] | null>(null);
+  const constellationLabelsRef = useRef<ConstellationLabel[] | null>(null);
+  const scenePointerTargetsRef = useRef<ScenePointerTarget[] | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -236,6 +321,9 @@ export default function SkyCanvas({ dateUtc, observer }: SkyCanvasProps) {
       const planets = planetsRef.current;
       const sun = sunRef.current;
       const moon = moonRef.current;
+      const labeledStars = labeledStarsRef.current;
+      const constellationLabels = constellationLabelsRef.current;
+      const scenePointerTargets = scenePointerTargetsRef.current;
       if (
         !canvas ||
         !stars ||
@@ -243,10 +331,15 @@ export default function SkyCanvas({ dateUtc, observer }: SkyCanvasProps) {
         !milkyWayRings ||
         !planets ||
         !sun ||
-        !moon
+        !moon ||
+        !labeledStars ||
+        !constellationLabels ||
+        !scenePointerTargets
       ) {
         return;
       }
+
+      const rotation = rotationRef.current;
 
       const dpr = window.devicePixelRatio || 1;
       const width = window.innerWidth;
@@ -272,7 +365,7 @@ export default function SkyCanvas({ dateUtc, observer }: SkyCanvasProps) {
       for (const ring of milkyWayRings) {
         ctx.beginPath();
         ring.vertices.forEach((altAz, i) => {
-          const point = projectAltAz(altAz, canvasSize);
+          const point = projectAltAz(altAz, canvasSize, rotation);
           if (!point) return; // shouldn't happen; vertices are pre-clamped >= 0
           if (i === 0) ctx.moveTo(point.x, point.y);
           else ctx.lineTo(point.x, point.y);
@@ -288,8 +381,8 @@ export default function SkyCanvas({ dateUtc, observer }: SkyCanvasProps) {
       ctx.lineWidth = CONSTELLATION_LINE_WIDTH;
       ctx.beginPath();
       for (const segment of constellationSegments) {
-        const pa = projectAltAz(segment.a, canvasSize);
-        const pb = projectAltAz(segment.b, canvasSize);
+        const pa = projectAltAz(segment.a, canvasSize, rotation);
+        const pb = projectAltAz(segment.b, canvasSize, rotation);
         if (!pa || !pb) continue;
         ctx.moveTo(pa.x, pa.y);
         ctx.lineTo(pb.x, pb.y);
@@ -301,7 +394,8 @@ export default function SkyCanvas({ dateUtc, observer }: SkyCanvasProps) {
       for (const star of stars) {
         const point = projectAltAz(
           { altitudeDeg: star.altitudeDeg, azimuthDeg: star.azimuthDeg },
-          canvasSize
+          canvasSize,
+          rotation
         );
         if (!point) continue;
 
@@ -316,7 +410,8 @@ export default function SkyCanvas({ dateUtc, observer }: SkyCanvasProps) {
       for (const planet of planets) {
         const point = projectAltAz(
           { altitudeDeg: planet.altitudeDeg, azimuthDeg: planet.azimuthDeg },
-          canvasSize
+          canvasSize,
+          rotation
         );
         if (!point) continue;
 
@@ -336,7 +431,7 @@ export default function SkyCanvas({ dateUtc, observer }: SkyCanvasProps) {
       // so a barely-below-horizon sun still renders right at the edge)
       if (sun.altitudeDeg >= SUN_MIN_ALTITUDE_DEG) {
         const clamped = { altitudeDeg: Math.max(0, sun.altitudeDeg), azimuthDeg: sun.azimuthDeg };
-        const point = projectAltAz(clamped, canvasSize);
+        const point = projectAltAz(clamped, canvasSize, rotation);
         if (point) {
           const gradient = ctx.createRadialGradient(
             point.x,
@@ -364,14 +459,71 @@ export default function SkyCanvas({ dateUtc, observer }: SkyCanvasProps) {
       {
         const point = projectAltAz(
           { altitudeDeg: moon.altitudeDeg, azimuthDeg: moon.azimuthDeg },
-          canvasSize
+          canvasSize,
+          rotation
         );
         if (point) {
           drawMoonPhase(ctx, point.x, point.y, MOON_RADIUS_PX, moon.phaseAngleDeg);
         }
       }
 
-      // 8. Horizon circle + cardinal labels
+      // 8. Labels (star + constellation), on top of all sky content
+      if (labelsEnabledRef.current) {
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'middle';
+
+        // Stars currently called out by a scene pointer get that instead of
+        // (redundantly on top of) their permanent label.
+        const pointedAtNames =
+          scenePointerOpacityRef.current > 0.001
+            ? new Set(scenePointerTargets.map((t) => t.label))
+            : null;
+
+        ctx.font = '11px sans-serif';
+        ctx.fillStyle = STAR_LABEL_COLOR;
+        for (const star of labeledStars) {
+          if (pointedAtNames?.has(star.name)) continue;
+          const point = projectAltAz(star.altAz, canvasSize, rotation);
+          if (!point) continue;
+          ctx.fillText(star.name, point.x + STAR_LABEL_OFFSET_PX, point.y - STAR_LABEL_OFFSET_PX);
+        }
+
+        ctx.font = '10px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillStyle = CONSTELLATION_LABEL_COLOR;
+        ctx.letterSpacing = '0.8px'; // 0.08em at 10px font
+        for (const label of constellationLabels) {
+          const centroid = projectCentroid(label.aboveHorizonEndpoints, canvasSize, rotation);
+          if (!centroid) continue;
+          ctx.fillText(label.name.toUpperCase(), centroid.x, centroid.y);
+        }
+        ctx.letterSpacing = '0px';
+      }
+
+      // 9. Scene-opening pointers
+      if (scenePointerOpacityRef.current > 0.001) {
+        ctx.globalAlpha = scenePointerOpacityRef.current;
+        ctx.strokeStyle = SCENE_POINTER_LINE_COLOR;
+        ctx.fillStyle = SCENE_POINTER_LABEL_COLOR;
+        ctx.lineWidth = 1;
+        ctx.font = '12px sans-serif';
+        ctx.textAlign = 'left';
+        ctx.textBaseline = 'middle';
+        for (const target of scenePointerTargets) {
+          const anchor = projectCentroid(target.altAzPoints, canvasSize, rotation);
+          if (!anchor) continue;
+          const endX = anchor.x + SCENE_POINTER_LINE_LENGTH_PX;
+          const endY = anchor.y - SCENE_POINTER_LINE_LENGTH_PX;
+          ctx.beginPath();
+          ctx.moveTo(anchor.x, anchor.y);
+          ctx.lineTo(endX, endY);
+          ctx.stroke();
+          ctx.fillText(target.label, endX + 4, endY);
+        }
+        ctx.globalAlpha = 1;
+      }
+
+      // 10. Horizon circle + cardinal labels (also rotate with the sky)
       const radius = getSkyRadius(canvasSize);
       const centerX = width / 2;
       const centerY = height / 2;
@@ -387,7 +539,7 @@ export default function SkyCanvas({ dateUtc, observer }: SkyCanvasProps) {
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       for (const [label, azimuthDeg] of CARDINALS) {
-        const azRad = (azimuthDeg * Math.PI) / 180;
+        const azRad = ((azimuthDeg - rotation) * Math.PI) / 180;
         const labelRadius = radius + CARDINAL_LABEL_OFFSET_PX;
         const x = centerX + labelRadius * Math.sin(azRad);
         const y = centerY - labelRadius * Math.cos(azRad);
@@ -399,35 +551,72 @@ export default function SkyCanvas({ dateUtc, observer }: SkyCanvasProps) {
 
     function recompute(currentDateUtc: Date, currentObserver: Astronomy.Observer) {
       const starsCatalog = starsCatalogRef.current;
-      const constellationPairs = constellationPairsRef.current;
+      const constellationsRaw = constellationsRawRef.current;
       const milkyWayRawRings = milkyWayRawRingsRef.current;
-      if (!starsCatalog || !constellationPairs || !milkyWayRawRings) return;
+      const labeledStarIds = labeledStarIdsRef.current;
+      const pointerStarIds = pointerStarIdsRef.current;
+      if (!starsCatalog || !constellationsRaw || !milkyWayRawRings || !labeledStarIds || !pointerStarIds) {
+        return;
+      }
 
       const start = performance.now();
       const astroTime = Astronomy.MakeTime(currentDateUtc);
 
       const starAltAzById = new Map<number, AltAz>();
       const starsRender: RenderStar[] = new Array(starsCatalog.length);
+      const labeledStars: LabeledStar[] = [];
       for (let i = 0; i < starsCatalog.length; i++) {
         const star = starsCatalog[i];
         const altAz = computeStarAltAz(star, currentObserver, currentDateUtc);
         starAltAzById.set(star.id, altAz);
         starsRender[i] = { altitudeDeg: altAz.altitudeDeg, azimuthDeg: altAz.azimuthDeg, mag: star.mag };
+        const labelName = labeledStarIds.get(star.id);
+        if (labelName && altAz.altitudeDeg >= STAR_LABEL_MIN_ALTITUDE_DEG) {
+          labeledStars.push({ name: labelName, altAz });
+        }
       }
       starsRef.current = starsRender;
+      labeledStarsRef.current = labeledStars;
 
-      const segments: ConstellationSegment[] = new Array(constellationPairs.length);
-      for (let i = 0; i < constellationPairs.length; i++) {
-        const [idA, idB] = constellationPairs[i];
-        segments[i] = { a: starAltAzById.get(idA)!, b: starAltAzById.get(idB)! };
+      const segments: ConstellationSegment[] = [];
+      const constellationLabels: ConstellationLabel[] = [];
+      for (const constellation of constellationsRaw) {
+        let aboveHorizonSegments = 0;
+        const endpointIds = new Set<number>();
+        for (const [idA, idB] of constellation.pairs) {
+          const a = starAltAzById.get(idA)!;
+          const b = starAltAzById.get(idB)!;
+          segments.push({ a, b });
+          endpointIds.add(idA);
+          endpointIds.add(idB);
+          if (a.altitudeDeg >= 0 && b.altitudeDeg >= 0) aboveHorizonSegments++;
+        }
+        const visible =
+          constellation.pairs.length > 0 &&
+          aboveHorizonSegments / constellation.pairs.length >= CONSTELLATION_LABEL_MIN_VISIBLE_FRACTION;
+        if (visible) {
+          const aboveHorizonEndpoints: AltAz[] = [];
+          for (const id of endpointIds) {
+            const altAz = starAltAzById.get(id)!;
+            if (altAz.altitudeDeg >= 0) aboveHorizonEndpoints.push(altAz);
+          }
+          constellationLabels.push({ name: constellation.name, aboveHorizonEndpoints });
+        }
       }
       constellationSegmentsRef.current = segments;
+      constellationLabelsRef.current = constellationLabels;
 
       const milkyWayRings: MilkyWayRing[] = [];
+      const brightestMilkyWayPoints: AltAz[] = [];
       for (const rawRing of milkyWayRawRings) {
         const altAzVertices = rawRing.points.map(([raDeg, decDeg]) =>
           computeAltAz({ raHours: raDeg / 15, decDegrees: decDeg }, currentObserver, currentDateUtc)
         );
+        if (rawRing.alpha === MILKY_WAY_BRIGHTEST_ALPHA) {
+          for (const v of altAzVertices) {
+            if (v.altitudeDeg >= 0) brightestMilkyWayPoints.push(v);
+          }
+        }
         const belowHorizonCount = altAzVertices.filter((v) => v.altitudeDeg < 0).length;
         if (belowHorizonCount / altAzVertices.length > MILKY_WAY_BELOW_HORIZON_SKIP_FRACTION) {
           continue;
@@ -439,6 +628,19 @@ export default function SkyCanvas({ dateUtc, observer }: SkyCanvasProps) {
         milkyWayRings.push({ alpha: rawRing.alpha, vertices: clamped });
       }
       milkyWayRingsRef.current = milkyWayRings;
+
+      const scenePointerTargets: ScenePointerTarget[] = [];
+      for (const name of SCENE_POINTER_NAMES) {
+        const id = pointerStarIds.get(name);
+        const altAz = id !== undefined ? starAltAzById.get(id) : undefined;
+        if (altAz && altAz.altitudeDeg >= 0) {
+          scenePointerTargets.push({ label: name, altAzPoints: [altAz] });
+        }
+      }
+      if (brightestMilkyWayPoints.length > 0) {
+        scenePointerTargets.push({ label: MILKY_WAY_POINTER_LABEL, altAzPoints: brightestMilkyWayPoints });
+      }
+      scenePointerTargetsRef.current = scenePointerTargets;
 
       const planets: RenderPlanet[] = [];
       const planetLogLines: string[] = [];
@@ -478,7 +680,7 @@ export default function SkyCanvas({ dateUtc, observer }: SkyCanvasProps) {
 
       if (!hasLoggedInitialStats) {
         console.log(
-          `Constellations: ${constellationCountRef.current}, segments loaded: ${segments.length}, segments above horizon: ${
+          `Constellations: ${constellationsRaw.length}, segments loaded: ${segments.length}, segments above horizon: ${
             segments.filter((s) => s.a.altitudeDeg >= 0 && s.b.altitudeDeg >= 0).length
           }`
         );
@@ -489,6 +691,11 @@ export default function SkyCanvas({ dateUtc, observer }: SkyCanvasProps) {
           `Moon: altitude ${moonAltAz.altitudeDeg.toFixed(2)} deg, illuminated ${(
             moonIllumination.phase_fraction * 100
           ).toFixed(1)}%, phase angle ${moonPhaseAngle.toFixed(1)} deg`
+        );
+        console.log(
+          `Labels: ${labeledStars.length} stars, ${constellationLabels.length} constellations. Scene pointer targets: ${scenePointerTargets
+            .map((t) => t.label)
+            .join(', ')}`
         );
         hasLoggedInitialStats = true;
       }
@@ -512,16 +719,28 @@ export default function SkyCanvas({ dateUtc, observer }: SkyCanvasProps) {
       for (const star of catalog.stars) starById.set(star.id, star);
       starByIdRef.current = starById;
 
-      const constellationPairs: [number, number][] = [];
-      for (const constellation of constellationsFile.constellations) {
-        for (const [idA, idB] of constellation.lines) {
-          if (starById.has(idA) && starById.has(idB)) {
-            constellationPairs.push([idA, idB]);
-          }
+      const labeledStarIds = new Map<number, string>();
+      const pointerStarIds = new Map<string, number>();
+      for (const star of catalog.stars) {
+        if (!star.proper) continue;
+        if (LABELED_STAR_NAMES.has(star.proper)) {
+          labeledStarIds.set(star.id, star.proper);
+        }
+        if ((SCENE_POINTER_NAMES as readonly string[]).includes(star.proper)) {
+          pointerStarIds.set(star.proper, star.id);
         }
       }
-      constellationPairsRef.current = constellationPairs;
-      constellationCountRef.current = constellationsFile.constellations.length;
+      labeledStarIdsRef.current = labeledStarIds;
+      pointerStarIdsRef.current = pointerStarIds;
+
+      const constellationsRaw: ConstellationRaw[] = [];
+      for (const constellation of constellationsFile.constellations) {
+        const pairs = constellation.lines.filter(
+          ([idA, idB]) => starById.has(idA) && starById.has(idB)
+        );
+        constellationsRaw.push({ name: constellation.name, pairs });
+      }
+      constellationsRawRef.current = constellationsRaw;
 
       const milkyWayRawRings: MilkyWayRawRing[] = [];
       milkyWayFile.features.forEach((feature, featureIndex) => {
@@ -545,6 +764,9 @@ export default function SkyCanvas({ dateUtc, observer }: SkyCanvasProps) {
     let rafId = 0;
     let lastComputeAtMs: number | null = null;
     let lastComputedDateMs: number | null = null;
+    let lastDrawnRotation = rotationRef.current;
+    let lastDrawnLabelsEnabled = labelsEnabledRef.current;
+    let lastDrawnPointerOpacity = scenePointerOpacityRef.current;
 
     function tick() {
       rafId = requestAnimationFrame(tick);
@@ -553,14 +775,32 @@ export default function SkyCanvas({ dateUtc, observer }: SkyCanvasProps) {
 
       const currentDate = dateRef.current;
       const currentDateMs = currentDate.getTime();
-      if (currentDateMs === lastComputedDateMs) return; // nothing changed - do nothing
+      const dateChanged = currentDateMs !== lastComputedDateMs;
 
-      const now = performance.now();
-      if (lastComputeAtMs !== null && now - lastComputeAtMs < RECOMPUTE_THROTTLE_MS) return;
+      const currentRotation = rotationRef.current;
+      const currentLabelsEnabled = labelsEnabledRef.current;
+      const currentPointerOpacity = scenePointerOpacityRef.current;
+      const redrawOnlyChanged =
+        currentRotation !== lastDrawnRotation ||
+        currentLabelsEnabled !== lastDrawnLabelsEnabled ||
+        currentPointerOpacity !== lastDrawnPointerOpacity;
 
-      lastComputeAtMs = now;
-      lastComputedDateMs = currentDateMs;
-      recompute(currentDate, observerRef.current);
+      if (!dateChanged && !redrawOnlyChanged) return; // nothing changed - do nothing
+
+      if (dateChanged) {
+        const now = performance.now();
+        if (lastComputeAtMs !== null && now - lastComputeAtMs < RECOMPUTE_THROTTLE_MS) return;
+        lastComputeAtMs = now;
+        lastComputedDateMs = currentDateMs;
+        recompute(currentDate, observerRef.current); // ends with draw()
+      } else {
+        // Rotation/labels/pointer-opacity changed but not the date: cheap
+        // reprojection only, never throttled by the astronomy-recompute budget.
+        draw();
+      }
+      lastDrawnRotation = currentRotation;
+      lastDrawnLabelsEnabled = currentLabelsEnabled;
+      lastDrawnPointerOpacity = currentPointerOpacity;
     }
 
     function handleResize() {

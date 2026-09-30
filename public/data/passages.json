@@ -1,0 +1,23 @@
+{
+  "_note": "Replace paraphrases with real short excerpts (each under 30 words) from the book before showing to Lightman. Keep attribution accurate. Copyright fair use for educational tribute; short excerpts only.",
+  "passages": [
+    {
+      "id": "opening",
+      "text": "[paraphrase, replace before demo] You are lying in a small motorboat, drifting toward your dock. The sky vibrates with stars.",
+      "attribution": "Searching for Stars on an Island in Maine, p. X",
+      "trigger": { "kind": "manual", "feature": null }
+    },
+    {
+      "id": "milky-way",
+      "text": "[paraphrase, replace before demo] Overhead, the Milky Way is a pale river of light, thousands of stars too faint to see alone but luminous together.",
+      "attribution": "Searching for Stars on an Island in Maine, p. X",
+      "trigger": { "kind": "sky-feature", "feature": "milky-way" }
+    },
+    {
+      "id": "polaris",
+      "text": "[paraphrase, replace before demo] One point of light does not move. Everything else wheels slowly around it through the night.",
+      "attribution": "Searching for Stars on an Island in Maine, p. X",
+      "trigger": { "kind": "sky-feature", "feature": "polaris" }
+    }
+  ]
+}

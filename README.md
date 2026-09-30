@@ -5,11 +5,15 @@ Bay, Maine, in *Searching for Stars on an Island in Maine* (2018).
 
 ## Status
 
-This is prompt 4 of a planned 7: the observation instant is now interactive
-— a scrubber, date picker, presets (The Moment / Now / Sunset /
-Astronomical dark / Astronomical dawn), step buttons, and a shareable
-`?t=<ISO>` URL. Location is still fixed at `POLE_ISLAND`; star colors,
-atmospheric extinction/twilight, and boat orientation come later.
+This is prompt 5 of a planned 7: the Lightman framing. "The Moment" now
+triggers a scripted opening (attribution card, then pointers to the Summer
+Triangle + Polaris + the Milky Way's densest arc); bright stars and
+above-horizon constellations get labels (toggle top-right); a bottom-right
+compass dial rotates the whole sky around zenith; a subtle bottom vignette
+suggests the boat; an About panel credits sources. `data/passages.json`
+holds placeholder (paraphrase) excerpts, not yet wired into any UI — real
+quotes are the user's to supply. Location is still fixed at `POLE_ISLAND`;
+star colors and atmospheric extinction/twilight come later.
 
 ## Stack
 
@@ -58,7 +62,11 @@ npm run build:data   # runs build:stars, build:constellations, build:milkyway in
   `localMidnightUtc`), used by `TimeControls` for display and for the
   Sunset/Astronomical dark/dawn presets' day-boundary searches
 - `lib/projection.ts` — zenith-centered stereographic projection (alt/az
-  &rarr; canvas pixels), unit-tested in `lib/projection.test.ts`
+  &rarr; canvas pixels), with an optional `rotationDeg` (compass rotation,
+  applied per-point so text labels are never themselves rotated),
+  unit-tested in `lib/projection.test.ts`
+- `lib/labels.ts` — the curated always-labeled star list and label
+  thresholds (star altitude, constellation visible-fraction)
 - `scripts/lib/cache.ts` — shared download/cache helper used by all three
   build scripts below
 - `scripts/build-star-catalog.ts` — downloads/caches HYG v4.1, filters to
@@ -72,17 +80,34 @@ npm run build:data   # runs build:stars, build:constellations, build:milkyway in
 - `scripts/build-milkyway.ts` — downloads/caches d3-celestial's `mw.json`,
   copies it verbatim to `public/data/mw.json`
 - `components/SkyCanvas.tsx` — full-viewport, DPR-aware canvas: Milky Way,
-  constellation lines, stars, planets, Sun, Moon (with phase), horizon
-  circle + cardinal labels, in that draw order. Controlled (`dateUtc` +
-  `observer` props); astronomy recompute + redraw run in a
-  `requestAnimationFrame` loop reading a ref, throttled to 30/sec, so a
-  React re-render never forces a recompute (raw catalog data loads once on
-  mount and is reused)
+  constellation lines, stars, planets, Sun, Moon (with phase), star +
+  constellation labels, scene-opening pointers, horizon circle + cardinal
+  labels — all rotate together via `rotationDeg`. Controlled (`dateUtc` +
+  `observer` + `rotationDeg` + `labelsEnabled` + `scenePointerOpacity`
+  props); astronomy recompute runs in a throttled (30/sec)
+  `requestAnimationFrame` loop, but rotation/labels/pointer-opacity changes
+  trigger an unthrottled reprojection-only redraw (no astronomy recompute)
 - `components/TimeControls.tsx` — scrubber, date picker, presets, step
   buttons, copy-link, and the top-left info readout
-- `components/SkyExperience.tsx` — owns the `dateUtc` state, wires
-  `SkyCanvas` + `TimeControls` together, and syncs `?t=<ISO>` in the URL
-  (`history.replaceState`, read back on mount)
+- `components/CompassDial.tsx` — bottom-right rotation dial (drag to
+  rotate, snaps within 3&deg; of 0, Reset button)
+- `components/TopRightControls.tsx` — Labels toggle + About (&#9432;) button
+- `components/AboutPanel.tsx` — credits/attribution panel
+- `components/BoatVignette.tsx` — bottom gradient + abstract gunwale curve
+- `components/SceneCard.tsx` — the opening attribution card (hardcoded
+  text per the prompt 5 spec, not sourced from `data/passages.json` — see
+  below)
+- `hooks/useSceneController.ts` — drives "The Moment"'s scripted timeline
+  (card hold/fade, pointer fade-in/hold/fade-out); any `pointerdown` /
+  `keydown` / `wheel` while active cancels it immediately
+- `data/passages.json` — 3 placeholder (paraphrase) excerpts with a
+  `manual` / `sky-feature` trigger schema. Not yet consumed by any UI in
+  this prompt (the scene card's own text is hardcoded, matching the prompt's
+  literal Line 3/4 wording) — this is scaffolding for real quotes later
+- `components/SkyExperience.tsx` — owns `dateUtc`/`rotationDeg`/
+  `labelsEnabled` state and the scene controller, wires everything together,
+  and syncs `?t=<ISO>` in the URL (`history.replaceState`, read back on
+  mount)
 - `app/page.tsx` — renders `<SkyExperience />`
 - `app/verify/page.tsx` — the prompt-1 verification table (Polaris, Sun,
   Moon, planets, local sidereal time), kept as an accuracy record, with

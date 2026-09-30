@@ -32,7 +32,14 @@ const TAN_45_DEG = Math.tan(45 * DEG2RAD); // == 1, kept explicit to match the p
  * Zenith-centered stereographic projection onto canvas pixels.
  *
  * North (azimuth 0) is at the top, east (azimuth 90) at the right — the view
- * looking straight up while lying on your back facing north.
+ * looking straight up while lying on your back facing north. `rotationDeg`
+ * (default 0) simulates turning your head while lying flat: it's subtracted
+ * from azimuth before projecting, so increasing rotationDeg spins the whole
+ * sky clockwise around zenith (dragging the compass dial clockwise by
+ * rotationDeg turns the rendered sky the same way the real sky would appear
+ * to turn if you rotated your head by that amount). Applied here (per-point,
+ * before x/y) rather than as a canvas transform, so text drawn at the
+ * returned point (star/constellation labels) is never itself rotated.
  *
  * r = R * tan(z/2) / tan(45deg), where z = 90 - altitude is the zenith angle
  * and R is the horizon radius. This normalizes the standard stereographic
@@ -43,7 +50,8 @@ const TAN_45_DEG = Math.tan(45 * DEG2RAD); // == 1, kept explicit to match the p
  */
 export function projectAltAz(
   { altitudeDeg, azimuthDeg }: AltAzInput,
-  canvasSize: CanvasSize
+  canvasSize: CanvasSize,
+  rotationDeg = 0
 ): ProjectedPoint | null {
   if (altitudeDeg < 0) return null;
 
@@ -53,7 +61,7 @@ export function projectAltAz(
   const zenithAngleRad = ((90 - alt) / 2) * DEG2RAD;
   const r = (radius * Math.tan(zenithAngleRad)) / TAN_45_DEG;
 
-  const azRad = azimuthDeg * DEG2RAD;
+  const azRad = (azimuthDeg - rotationDeg) * DEG2RAD;
   const x = canvasSize.width / 2 + r * Math.sin(azRad);
   const y = canvasSize.height / 2 - r * Math.cos(azRad);
 

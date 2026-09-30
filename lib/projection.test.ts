@@ -45,4 +45,23 @@ describe('projectAltAz', () => {
     expect(projectAltAz({ altitudeDeg: -0.01, azimuthDeg: 0 }, CANVAS)).toBeNull();
     expect(projectAltAz({ altitudeDeg: -45, azimuthDeg: 0 }, CANVAS)).toBeNull();
   });
+
+  it('defaults rotationDeg to 0 (unrotated)', () => {
+    const a = projectAltAz({ altitudeDeg: 45, azimuthDeg: 30 }, CANVAS);
+    const b = projectAltAz({ altitudeDeg: 45, azimuthDeg: 30 }, CANVAS, 0);
+    expect(a).toEqual(b);
+  });
+
+  it('rotating by rotationDeg is equivalent to subtracting it from azimuth', () => {
+    const rotated = projectAltAz({ altitudeDeg: 45, azimuthDeg: 90 }, CANVAS, 90);
+    const unrotatedEquivalent = projectAltAz({ altitudeDeg: 45, azimuthDeg: 0 }, CANVAS);
+    expect(rotated!.x).toBeCloseTo(unrotatedEquivalent!.x, 9);
+    expect(rotated!.y).toBeCloseTo(unrotatedEquivalent!.y, 9);
+  });
+
+  it('does not change the distance from center (rotation preserves altitude)', () => {
+    const point = projectAltAz({ altitudeDeg: 30, azimuthDeg: 15 }, CANVAS, 123);
+    const expected = projectAltAz({ altitudeDeg: 30, azimuthDeg: 15 }, CANVAS, 0);
+    expect(distanceFromCenter(point!)).toBeCloseTo(distanceFromCenter(expected!), 9);
+  });
 });

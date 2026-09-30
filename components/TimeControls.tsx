@@ -17,6 +17,8 @@ interface TimeControlsProps {
   dateUtc: Date;
   observer: Astronomy.Observer;
   onChange: (date: Date) => void;
+  /** Called (after the date jump) when "The Moment" is clicked, to trigger the scripted opening. */
+  onTheMoment?: () => void;
 }
 
 const HOUR_MS = 3600 * 1000;
@@ -41,7 +43,7 @@ function formatClock(date: Date | null): string {
   return formatLocalTime(date, CASCO_BAY_TIME_ZONE);
 }
 
-export default function TimeControls({ dateUtc, observer, onChange }: TimeControlsProps) {
+export default function TimeControls({ dateUtc, observer, onChange, onTheMoment }: TimeControlsProps) {
   const [scrubCenter, setScrubCenter] = useState<Date>(() => new Date(REFERENCE_MOMENT));
   const [copied, setCopied] = useState(false);
 
@@ -79,6 +81,7 @@ export default function TimeControls({ dateUtc, observer, onChange }: TimeContro
 
   function handleTheMoment() {
     jumpTo(new Date(REFERENCE_MOMENT));
+    onTheMoment?.();
   }
 
   function handleNow() {
