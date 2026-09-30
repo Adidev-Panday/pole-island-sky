@@ -104,6 +104,7 @@ const PLANET_COLORS: Partial<Record<Astronomy.Body, string>> = {
   [Astronomy.Body.Neptune]: '#6d8ee8',
 };
 
+const PLANET_MAGNITUDE_LIMIT = 6.5; // same naked-eye cutoff as the star catalog
 const PLANET_SIZE_SCALE = 1.5;
 const PLANET_HALO_EXTRA_PX = 2;
 const PLANET_HALO_ALPHA = 0.35;
@@ -428,20 +429,16 @@ export default function SkyCanvas() {
       milkyWayRingsRef.current = milkyWayRings;
       console.log(`Milky Way: ${milkyWayRings.length} contour rings rendered above horizon.`);
 
-      // Note: unlike stars, planets aren't gated by a naked-eye magnitude
-      // cutoff here (none was specified) - they're drawn whenever they're
-      // geometrically above the horizon. At REFERENCE_MOMENT, Uranus (mag
-      // ~5.8, borderline naked-eye at best) and Neptune (mag ~7.8, never
-      // naked-eye) are both above the horizon even though the classic
-      // "visible planets" (Mercury/Venus/Mars/Jupiter/Saturn) are all below
-      // it - so "no planets visible" is true in the everyday sense but not
-      // quite literally for all 7 bodies. See console output below.
+      // Gated to the same naked-eye magnitude limit as the star catalog
+      // (mag <= 6.5), so e.g. Neptune (mag ~7.8, never naked-eye) doesn't
+      // render even when it's geometrically above the horizon. Uranus (mag
+      // ~5.8, borderline naked-eye) stays under this cutoff.
       const planets: RenderPlanet[] = [];
       for (const body of PLANET_BODIES) {
         const altAz = computeAltAz(body, observer, dateUtc);
         const mag = Astronomy.Illumination(body, astroTime).mag;
         console.log(`${body}: altitude ${altAz.altitudeDeg.toFixed(2)} deg, mag ${mag.toFixed(2)}`);
-        if (altAz.altitudeDeg < 0) continue;
+        if (altAz.altitudeDeg < 0 || mag > PLANET_MAGNITUDE_LIMIT) continue;
         planets.push({
           name: body,
           altitudeDeg: altAz.altitudeDeg,
