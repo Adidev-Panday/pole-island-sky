@@ -31,8 +31,18 @@ function buildStarField() {
   });
 }
 
+interface ShareImageText {
+  title: string;
+  subtitle: string;
+}
+
+const DEFAULT_SHARE_IMAGE_TEXT: ShareImageText = {
+  title: 'Pole Island Sky',
+  subtitle: "The wee-hours sky from Alan Lightman's Casco Bay island",
+};
+
 /** Shared JSX tree for the Open Graph / Twitter share images. */
-export function renderShareImage() {
+export function renderShareImage(text: ShareImageText = DEFAULT_SHARE_IMAGE_TEXT) {
   const stars = buildStarField();
 
   return (
@@ -81,7 +91,7 @@ export function renderShareImage() {
             display: 'flex',
           }}
         >
-          Pole Island Sky
+          {text.title}
         </div>
         <div
           style={{
@@ -91,7 +101,7 @@ export function renderShareImage() {
             display: 'flex',
           }}
         >
-          The wee-hours sky from Alan Lightman&apos;s Casco Bay island
+          {text.subtitle}
         </div>
       </div>
 
