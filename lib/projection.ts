@@ -20,9 +20,16 @@ export interface ProjectedPoint {
  */
 export const CANVAS_MARGIN_PX = 28;
 
-/** Radius (px) of the horizon circle for a given canvas size. */
+/**
+ * Radius (px) of the horizon circle for a given canvas size.
+ *
+ * Uses the longer dimension so the horizon circle fills the viewport rather
+ * than being inscribed in it: the circle clips at top/bottom in portrait and
+ * left/right in landscape, and corners show sky above the horizon instead of
+ * empty space beyond it.
+ */
 export function getSkyRadius({ width, height }: CanvasSize): number {
-  return Math.min(width, height) / 2 - CANVAS_MARGIN_PX;
+  return Math.max(width, height) / 2 - CANVAS_MARGIN_PX;
 }
 
 const DEG2RAD = Math.PI / 180;

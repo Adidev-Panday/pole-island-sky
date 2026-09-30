@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState, type ChangeEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
 import * as Astronomy from 'astronomy-engine';
 import { REFERENCE_MOMENT } from '@/lib/observer';
 import { computeAltAz, computeLocalSiderealTime, moonPhaseName } from '@/lib/sky';
@@ -30,6 +30,15 @@ const SCRUBBER_MAX_MINUTES = SCRUBBER_SPAN_MS / 60000;
 const ASTRO_TWILIGHT_ALTITUDE_DEG = -18;
 const RISE_SET_SEARCH_DAYS = 1.1; // a touch over 1 day of search margin
 
+// A full 24h sky cycle drifts by in 90 real seconds at 1x - slow drifting,
+// not a time-lapse. 4x/16x scale linearly off this base rate.
+const BASE_SKY_SECONDS_PER_REAL_SECOND = DAY_MS / 1000 / 90; // 960
+const SPEED_OPTIONS: Array<{ label: string; multiplier: number }> = [
+  { label: '1x', multiplier: 1 },
+  { label: '4x', multiplier: 4 },
+  { label: '16x', multiplier: 16 },
+];
+
 function riseSetSearch(
   observer: Astronomy.Observer,
   dayStart: Date
@@ -49,7 +58,82 @@ export default function TimeControls({ dateUtc, observer, onChange, onTheMoment 
   const [copied, setCopied] = useState(false);
   const [readoutExpanded, setReadoutExpanded] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
+  const [playing, setPlaying] = useState(false);
+  const [speedMultiplier, setSpeedMultiplier] = useState(1);
   const isMobile = useIsMobile();
+
+  // Playback loop state, mirrored into refs so the rAF loop always reads the
+  // latest values without re-subscribing every render.
+  const playingRef = useRef(playing);
+  const speedMultiplierRef = useRef(speedMultiplier);
+  const dateRef = useRef(dateUtc);
+  const scrubCenterRef = useRef(scrubCenter);
+  const onChangeRef = useRef(onChange);
+  useEffect(() => {
+    playingRef.current = playing;
+  }, [playing]);
+  useEffect(() => {
+    speedMultiplierRef.current = speedMultiplier;
+  }, [speedMultiplier]);
+  useEffect(() => {
+    dateRef.current = dateUtc;
+  }, [dateUtc]);
+  useEffect(() => {
+    scrubCenterRef.current = scrubCenter;
+  }, [scrubCenter]);
+  useEffect(() => {
+    onChangeRef.current = onChange;
+  }, [onChange]);
+
+  useEffect(() => {
+    let rafId = 0;
+    let lastFrameMs: number | null = null;
+
+    function tick(nowMs: number) {
+      rafId = requestAnimationFrame(tick);
+
+      if (!playingRef.current) {
+        lastFrameMs = null;
+        return;
+      }
+      if (lastFrameMs === null) {
+        lastFrameMs = nowMs;
+        return;
+      }
+      const dtSeconds = (nowMs - lastFrameMs) / 1000;
+      lastFrameMs = nowMs;
+
+      const skySecondsPerRealSecond = BASE_SKY_SECONDS_PER_REAL_SECOND * speedMultiplierRef.current;
+      const deltaMs = dtSeconds * skySecondsPerRealSecond * 1000;
+
+      const rangeStart = scrubCenterRef.current.getTime() - DAY_MS;
+      let nextMs = dateRef.current.getTime() + deltaMs;
+      if (nextMs >= rangeStart + SCRUBBER_SPAN_MS) {
+        nextMs = rangeStart + ((nextMs - rangeStart) % SCRUBBER_SPAN_MS);
+      }
+
+      const nextDate = new Date(nextMs);
+      dateRef.current = nextDate;
+      onChangeRef.current(nextDate);
+    }
+
+    rafId = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(rafId);
+  }, []);
+
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.code !== 'Space') return;
+      const target = e.target as HTMLElement | null;
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) {
+        return;
+      }
+      e.preventDefault();
+      setPlaying((v) => !v);
+    }
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
 
   const localDate = formatLocalDate(dateUtc, CASCO_BAY_TIME_ZONE);
   const localTime = formatLocalTime(dateUtc, CASCO_BAY_TIME_ZONE);
@@ -75,6 +159,7 @@ export default function TimeControls({ dateUtc, observer, onChange, onTheMoment 
   );
 
   function jumpTo(newDate: Date) {
+    setPlaying(false);
     onChange(newDate);
     setScrubCenter(newDate);
   }
@@ -153,8 +238,13 @@ export default function TimeControls({ dateUtc, observer, onChange, onTheMoment 
   );
 
   function handleSliderChange(e: ChangeEvent<HTMLInputElement>) {
+    setPlaying(false);
     const minutes = Number(e.target.value);
     onChange(new Date(scrubberMin + minutes * 60000));
+  }
+
+  function handlePlayPause() {
+    setPlaying((v) => !v);
   }
 
   return (
@@ -178,6 +268,11 @@ export default function TimeControls({ dateUtc, observer, onChange, onTheMoment 
         <div>UTC: {dateUtc.toISOString()}</div>
         <div>
           Casco Bay: {localTime} {zoneAbbrev}, {localDate}
+          {playing && (
+            <span style={{ opacity: 0.6, marginLeft: 6 }}>
+              &middot; playing {speedMultiplier}x
+            </span>
+          )}
         </div>
         <div>
           Sun: alt {sunAltAz.altitudeDeg.toFixed(2)}&deg;
@@ -275,6 +370,35 @@ export default function TimeControls({ dateUtc, observer, onChange, onTheMoment 
           <button className="time-btn" onClick={handleNow}>
             Now
           </button>
+          <button
+            className="time-btn time-icon-btn"
+            onClick={handlePlayPause}
+            aria-label={playing ? 'Pause' : 'Play'}
+            aria-pressed={playing}
+          >
+            {playing ? (
+              <svg width="12" height="14" viewBox="0 0 12 14" aria-hidden="true">
+                <rect x="0" y="0" width="4" height="14" fill="currentColor" />
+                <rect x="8" y="0" width="4" height="14" fill="currentColor" />
+              </svg>
+            ) : (
+              <svg width="12" height="14" viewBox="0 0 12 14" aria-hidden="true">
+                <path d="M0 0 L12 7 L0 14 Z" fill="currentColor" />
+              </svg>
+            )}
+          </button>
+          <div className="speed-pills" role="group" aria-label="Playback speed">
+            {SPEED_OPTIONS.map(({ label, multiplier }) => (
+              <button
+                key={label}
+                className={`speed-pill${speedMultiplier === multiplier ? ' speed-pill-active' : ''}`}
+                onClick={() => setSpeedMultiplier(multiplier)}
+                aria-pressed={speedMultiplier === multiplier}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
           {isMobile ? (
             <div style={{ position: 'relative' }}>
               <button className="time-btn" onClick={() => setMoreOpen((v) => !v)}>
@@ -437,6 +561,39 @@ export default function TimeControls({ dateUtc, observer, onChange, onTheMoment 
         }
         .time-btn:active {
           background: rgba(255, 255, 255, 0.18);
+        }
+
+        .time-icon-btn {
+          width: 28px;
+          padding: 0;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+        }
+
+        .speed-pills {
+          display: inline-flex;
+          gap: 2px;
+        }
+
+        .speed-pill {
+          height: 28px;
+          min-width: 32px;
+          padding: 0 8px;
+          border: 1px solid rgba(255, 255, 255, 0.14);
+          border-radius: 14px;
+          background: rgba(255, 255, 255, 0.04);
+          color: rgba(232, 236, 245, 0.65);
+          font-size: 12px;
+          cursor: pointer;
+        }
+        .speed-pill:hover {
+          background: rgba(255, 255, 255, 0.1);
+        }
+        .speed-pill-active {
+          background: rgba(255, 255, 255, 0.2);
+          color: #e8ecf5;
+          border-color: rgba(255, 255, 255, 0.32);
         }
       `}</style>
     </>
