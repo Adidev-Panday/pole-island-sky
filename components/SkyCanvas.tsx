@@ -203,6 +203,10 @@ const PLANET_COLORS: Partial<Record<Astronomy.Body, string>> = {
 
 const PLANET_MAGNITUDE_LIMIT = 6.5; // same naked-eye cutoff as the star catalog
 const PLANET_SIZE_SCALE = 1.5;
+// magnitudeToRadiusPx grows exponentially for very bright objects (Venus at
+// mag -4 would otherwise draw at ~35px) - clamp so even the brightest planet
+// never balloons past a normal bright-star-sized dot.
+const PLANET_RADIUS_MAX_PX = 10;
 const PLANET_HALO_EXTRA_PX = 2;
 const PLANET_HALO_ALPHA = 0.35;
 
@@ -998,7 +1002,7 @@ export default function SkyCanvas({
           altitudeDeg: altAz.altitudeDeg,
           azimuthDeg: altAz.azimuthDeg,
           color: PLANET_COLORS[body] ?? '#ffffff',
-          radiusPx: magnitudeToRadiusPx(effMag) * PLANET_SIZE_SCALE,
+          radiusPx: Math.min(PLANET_RADIUS_MAX_PX, magnitudeToRadiusPx(effMag) * PLANET_SIZE_SCALE),
         });
       }
       planetsRef.current = planets;
@@ -1217,8 +1221,9 @@ export default function SkyCanvas({
       const zoom = zoomRef.current;
       const pan = panRef.current;
 
+      const starSizeFactor = starZoomSizeFactor(zoom);
       let best: CatalogStarRecord | null = null;
-      let bestDist = HIT_TEST_RADIUS_PX;
+      let bestDist = Infinity;
       for (const star of stars) {
         const projected = projectAltAz(
           { altitudeDeg: star.altitudeDeg, azimuthDeg: star.azimuthDeg },
@@ -1229,7 +1234,12 @@ export default function SkyCanvas({
         );
         if (!projected) continue;
         const d = Math.hypot(projected.x - point.x, projected.y - point.y);
-        if (d <= bestDist) {
+        // A star's own hit radius tracks its rendered size (bigger at high
+        // zoom) so a visually large star stays clickable at its edges, not
+        // just within the fixed base radius.
+        const renderedRadius = magnitudeToRadiusPx(star.effectiveMag) * starSizeFactor;
+        const hitRadius = Math.max(HIT_TEST_RADIUS_PX, renderedRadius + 4);
+        if (d <= hitRadius && d < bestDist) {
           bestDist = d;
           best = starById.get(star.id) ?? null;
         }

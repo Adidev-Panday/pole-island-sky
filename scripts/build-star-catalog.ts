@@ -7,6 +7,25 @@ import { DATA_DIR, PUBLIC_DATA_DIR, HYG_URL, HYG_CACHE_PATH, fetchCached } from 
 const MAGNITUDE_LIMIT = 6.5;
 const SUN_ID = 0;
 
+// Sirius (-1.46) is the brightest real star; anything brighter than this in
+// the raw catalog is not a plausible single star.
+const MIN_PLAUSIBLE_MAGNITUDE = -2;
+
+// HYG carries a handful of non-stellar entries (open clusters/asterisms)
+// alongside real stars, which render as wildly oversized, uncatalogable
+// circles in the sky view - drop them by their known proper names.
+const NON_STELLAR_PROPER_NAMES = new Set([
+  'M44',
+  'Beehive',
+  'Beehive Cluster',
+  'Praesepe',
+  'M45',
+  'Pleiades',
+  'h Persei',
+  'chi Persei',
+  'Hyades',
+]);
+
 interface HygRow {
   id: string;
   hip: string;
@@ -76,6 +95,8 @@ async function main() {
   const stars: CatalogStarRecord[] = [];
   let droppedSun = 0;
   let droppedFaint = 0;
+  let droppedNonStellar = 0;
+  let droppedImpossibleMag = 0;
 
   for (const row of rows) {
     const id = Number.parseInt(row.id, 10);
@@ -84,9 +105,19 @@ async function main() {
       continue;
     }
 
+    const properRaw = nullableString(row.proper);
+    if (properRaw && NON_STELLAR_PROPER_NAMES.has(properRaw)) {
+      droppedNonStellar += 1;
+      continue;
+    }
+
     const mag = Number.parseFloat(row.mag);
     if (Number.isNaN(mag) || mag > MAGNITUDE_LIMIT) {
       droppedFaint += 1;
+      continue;
+    }
+    if (mag < MIN_PLAUSIBLE_MAGNITUDE) {
+      droppedImpossibleMag += 1;
       continue;
     }
 
@@ -111,7 +142,7 @@ async function main() {
       spect: spectRaw,
       pmra: nullableFloat(row.pmra),
       pmdec: nullableFloat(row.pmdec),
-      proper: nullableString(row.proper),
+      proper: properRaw,
       bayer: nullableString(row.bayer),
       con: nullableString(row.con),
       dist: hasKnownDistance ? round(distRaw!, 2) : null,
@@ -121,7 +152,7 @@ async function main() {
   }
 
   console.log(
-    `Kept ${stars.length} stars (mag <= ${MAGNITUDE_LIMIT}); dropped Sun: ${droppedSun}, dropped faint: ${droppedFaint}.`
+    `Kept ${stars.length} stars (mag <= ${MAGNITUDE_LIMIT}); dropped Sun: ${droppedSun}, dropped faint: ${droppedFaint}, dropped non-stellar: ${droppedNonStellar}, dropped impossible magnitude: ${droppedImpossibleMag}.`
   );
 
   const catalog = {
@@ -144,6 +175,8 @@ async function main() {
     keptCount: stars.length,
     droppedSun,
     droppedFaint,
+    droppedNonStellar,
+    droppedImpossibleMag,
     magnitudeHistogram: magHistogram(stars.map((s) => s.mag)),
     nullCounts: {
       ci: stars.filter((s) => s.ci === null).length,

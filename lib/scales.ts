@@ -61,7 +61,7 @@ export const SCALE_STOPS: ScaleStop[] = [
     scaleMeters: 1.68e-15,
     name: 'Proton',
     fact: 'A proton is about a hundred thousand times smaller than the atom it sits inside, itself built from three quarks bound by the strong force.',
-    image: '/scales/proton.png',
+    image: '/scales/proton.webp',
     imageCredit: 'Arpad Horvath, CC BY-SA 4.0, Wikimedia Commons',
   },
   {
@@ -125,7 +125,7 @@ export const SCALE_STOPS: ScaleStop[] = [
     scaleMeters: 1.7,
     name: 'Human being',
     fact: 'At roughly 1.7 meters, a person is the reference point the entire rest of this journey scales against - the only stop measured in a single, whole unit.',
-    image: '/scales/human.jpg',
+    image: '/scales/human.webp',
     imageCredit: 'NASA Pioneer plaque, public domain',
   },
   {
@@ -152,7 +152,7 @@ export const SCALE_STOPS: ScaleStop[] = [
     scaleMeters: 1.2742e7,
     name: 'Earth',
     fact: "Our planet's diameter is about 12,700 kilometers - light circles it roughly seven and a half times in a single second.",
-    image: '/scales/earth.jpg',
+    image: '/scales/earth.webp',
     imageCredit: 'NASA Apollo 17, public domain',
   },
   // Cosmic (12-17)
@@ -171,7 +171,7 @@ export const SCALE_STOPS: ScaleStop[] = [
     scaleMeters: 9.0e12,
     name: 'Solar System',
     fact: "Out to Neptune's orbit, the Solar System spans about nine trillion meters - and even that is a small fraction of the way to the nearest star.",
-    image: '/scales/solar-system.jpg',
+    image: '/scales/solar-system.webp',
     imageCredit: 'NASA, public domain',
   },
   {

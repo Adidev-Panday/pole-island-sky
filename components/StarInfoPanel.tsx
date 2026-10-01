@@ -60,6 +60,7 @@ export default function StarInfoPanel({ star, observer, dateUtc, onClose }: Star
 
   const name = starDisplayName(star);
   const constellationName = star.con ? constellationNames?.get(star.con) ?? star.con : null;
+  const distanceText = formatDistanceLightYears(star.dist);
   const luminosityText = formatLuminosity(star.lum);
   const spectralDesc = spectralClassDescription(star.spect);
 
@@ -121,9 +122,9 @@ export default function StarInfoPanel({ star, observer, dateUtc, onClose }: Star
       <p style={{ marginTop: 14, marginBottom: 4, color: 'rgba(232, 236, 245, 0.85)' }}>
         Apparent magnitude {star.mag.toFixed(2)}
       </p>
-      <p style={{ marginTop: 0, marginBottom: 4, color: 'rgba(232, 236, 245, 0.85)' }}>
-        {formatDistanceLightYears(star.dist)}
-      </p>
+      {distanceText && (
+        <p style={{ marginTop: 0, marginBottom: 4, color: 'rgba(232, 236, 245, 0.85)' }}>{distanceText}</p>
+      )}
       {luminosityText && (
         <p style={{ marginTop: 0, marginBottom: 4, color: 'rgba(232, 236, 245, 0.85)' }}>
           {luminosityText}

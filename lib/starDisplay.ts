@@ -50,9 +50,13 @@ export function starDisplayName(star: CatalogStarRecord): string {
   return `Star ${star.id}`;
 }
 
-/** "X light-years": 1 decimal below 100 ly, whole number at/above. Null if no catalog distance. */
-export function formatDistanceLightYears(distParsecs: number | null): string {
-  if (distParsecs === null) return 'Distance not in catalog.';
+/**
+ * "X light-years": 1 decimal below 100 ly, whole number at/above. Null (row
+ * should be omitted entirely, not shown as a placeholder) if dist is absent
+ * from the catalog or not a finite number.
+ */
+export function formatDistanceLightYears(distParsecs: number | null): string | null {
+  if (distParsecs === null || !Number.isFinite(distParsecs)) return null;
   const ly = distParsecs * PARSECS_TO_LIGHT_YEARS;
   const formatted =
     ly < 100
@@ -61,9 +65,13 @@ export function formatDistanceLightYears(distParsecs: number | null): string {
   return `${formatted} light-years`;
 }
 
-/** "X times the Sun", nicely formatted (1.0, 25, 8,700, 1.2 million). Null if no catalog luminosity. */
+/**
+ * "X times the Sun", nicely formatted (1.0, 25, 8,700, 1.2 million). Null
+ * (row should be omitted entirely) if lum is absent, not finite, or not a
+ * positive number (a non-positive luminosity isn't physically meaningful).
+ */
 export function formatLuminosity(lumSolar: number | null): string | null {
-  if (lumSolar === null) return null;
+  if (lumSolar === null || !Number.isFinite(lumSolar) || lumSolar <= 0) return null;
   let formatted: string;
   if (lumSolar >= 1_000_000) {
     formatted = `${(lumSolar / 1_000_000).toLocaleString('en-US', { maximumFractionDigits: 1 })} million`;

@@ -29,7 +29,12 @@ import ScalesAboutPanel from '@/components/ScalesAboutPanel';
 
 const STOP_COUNT = SCALE_STOPS.length;
 const IMAGE_MIN_PX = 2;
-const IMAGE_MAX_PX = 8000;
+// A flat 8000px cap let every off-dominant stop (often many orders of
+// magnitude away from the current calibration) balloon to the same huge box
+// and pile up across the whole viewport. Capping relative to viewport height
+// instead means a wildly-off-scale stop still fills/exceeds the screen (the
+// "we're inside it now" effect is preserved) without smearing into neighbors.
+const IMAGE_MAX_HEIGHT_VIEWPORT_FACTOR = 1.4;
 const AUTOPLAY_SPEED_PX_PER_SEC = 220;
 const AUTOPLAY_PAUSE_MS = 900;
 const AUTOPLAY_PAUSE_EPSILON_PX = 4;
@@ -173,18 +178,21 @@ export default function ScalesExperience() {
         const centerX = el.scrollLeft;
         const mpp = mppAtX(layout, centerX);
         const nearest = dominantIndexForX(layout, centerX);
+        const maxImagePx = window.innerHeight * IMAGE_MAX_HEIGHT_VIEWPORT_FACTOR;
 
         for (let i = 0; i < SCALE_STOPS.length; i++) {
           const img = imageRefs.current[i];
-          if (!img) continue;
-          const heightPx = Math.max(IMAGE_MIN_PX, Math.min(IMAGE_MAX_PX, imageHeightAtMpp(SCALE_STOPS[i], mpp)));
+          if (!img || !img.naturalWidth || !img.naturalHeight) continue;
+          const heightPx = Math.max(IMAGE_MIN_PX, Math.min(maxImagePx, imageHeightAtMpp(SCALE_STOPS[i], mpp)));
+          const widthPx = heightPx * (img.naturalWidth / img.naturalHeight);
           img.style.height = `${heightPx}px`;
+          img.style.width = `${widthPx}px`;
         }
 
         const humanHeightPx = HUMAN_HEIGHT_METERS / mpp;
         if (humanRef.current && humanCaptionRef.current) {
           const isDot = humanHeightPx < HUMAN_DOT_THRESHOLD_PX;
-          const clamped = isDot ? 2 : Math.min(IMAGE_MAX_PX, humanHeightPx);
+          const clamped = isDot ? 2 : Math.min(maxImagePx, humanHeightPx);
           humanRef.current.style.height = `${clamped}px`;
           humanRef.current.style.width = `${clamped * HUMAN_SILHOUETTE_ASPECT}px`;
           humanCaptionRef.current.style.display = isDot ? 'block' : 'none';
@@ -464,7 +472,7 @@ export default function ScalesExperience() {
           position: relative;
           height: 100dvh;
           overflow: hidden;
-          background: #05060f;
+          background: #02030a;
           font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
         }
 

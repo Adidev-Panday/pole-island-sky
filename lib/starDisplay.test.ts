@@ -59,8 +59,13 @@ describe('bayerGreekLetter', () => {
 });
 
 describe('formatDistanceLightYears', () => {
-  it('reports catalog absence explicitly', () => {
-    expect(formatDistanceLightYears(null)).toBe('Distance not in catalog.');
+  it('returns null when the catalog has no value (row should be omitted)', () => {
+    expect(formatDistanceLightYears(null)).toBeNull();
+  });
+
+  it('returns null for non-finite input', () => {
+    expect(formatDistanceLightYears(NaN)).toBeNull();
+    expect(formatDistanceLightYears(Infinity)).toBeNull();
   });
 
   it('rounds to 1 decimal below 100 ly (Vega, 7.68pc)', () => {
@@ -75,6 +80,13 @@ describe('formatDistanceLightYears', () => {
 describe('formatLuminosity', () => {
   it('returns null when the catalog has no value', () => {
     expect(formatLuminosity(null)).toBeNull();
+  });
+
+  it('returns null for non-finite or non-positive input', () => {
+    expect(formatLuminosity(NaN)).toBeNull();
+    expect(formatLuminosity(Infinity)).toBeNull();
+    expect(formatLuminosity(0)).toBeNull();
+    expect(formatLuminosity(-5)).toBeNull();
   });
 
   it('formats sub-10 values with 1 decimal', () => {

@@ -5,6 +5,8 @@
   "keptCount": 8920,
   "droppedSun": 1,
   "droppedFaint": 110705,
+  "droppedNonStellar": 0,
+  "droppedImpossibleMag": 0,
   "magnitudeHistogram": {
     "6.0": 3815,
     "5.5": 2186,
