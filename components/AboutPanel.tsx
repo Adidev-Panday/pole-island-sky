@@ -92,7 +92,7 @@ export default function AboutPanel({ onClose }: AboutPanelProps) {
           rel="noopener noreferrer"
           style={{ color: '#9db8ff' }}
         >
-          Buy the book
+          Read The Book
         </a>
       </p>
 
