@@ -1,7 +1,6 @@
 'use client';
 
 import { useEffect, useRef } from 'react';
-import Link from 'next/link';
 
 interface AboutPanelProps {
   onClose: () => void;
@@ -104,13 +103,6 @@ export default function AboutPanel({ onClose }: AboutPanelProps) {
         >
           Buy the book
         </a>
-      </p>
-
-      <p style={{ fontSize: 12 }}>
-        Companion piece:{' '}
-        <Link href="/scales" style={{ color: '#9db8ff' }}>
-          Scales of Wonder
-        </Link>
       </p>
 
       <p style={{ color: 'rgba(232, 236, 245, 0.4)', fontSize: 11, marginBottom: 0 }}>
