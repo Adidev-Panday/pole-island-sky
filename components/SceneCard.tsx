@@ -62,7 +62,7 @@ export default function SceneCard({ visible, faded, line3Visible, onDismiss }: S
             marginBottom: isMobile ? 16 : 22,
           }}
         >
-          1:30 in the morning, mid-August
+          Past Midnight, Mid-Summer
         </div>
         <div
           style={{
