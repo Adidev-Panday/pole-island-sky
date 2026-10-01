@@ -27,6 +27,8 @@ export interface ScaleStop {
   attribution?: string;
   /** Real photo URL, once supplied - falls back to the generated placeholder when absent/broken. */
   image?: string;
+  /** Attribution for `image` (photographer/source + license), shown under the fact text. */
+  imageCredit?: string;
   /**
    * Rendered image height, in px, when this stop is the "dominant" one under
    * the viewport center - see DEFAULT_DISPLAY_HEIGHT_PX / displayHeightForStop.
@@ -37,11 +39,10 @@ export interface ScaleStop {
 /**
  * A powers-of-ten journey from the Planck length to the observable universe,
  * grouped in three sixes for the progress rail's "Quantum / Human / Cosmic"
- * labels. Real photographs are out of scope (see prompt) - every stop
- * renders through /scales/placeholder until real images are supplied, and
- * quote/attribution are left unset (real Lightman quotes are also out of
- * scope) - StarInfoPanel-style optional rendering is still implemented so
- * they light up the moment text is added.
+ * labels. Stops without a real photo fall back to /scales/placeholder.
+ * quote/attribution are left unset (real Lightman quotes are out of scope) -
+ * StarInfoPanel-style optional rendering is still implemented so they light
+ * up the moment text is added.
  */
 export const SCALE_STOPS: ScaleStop[] = [
   // Quantum (0-5)
@@ -51,6 +52,8 @@ export const SCALE_STOPS: ScaleStop[] = [
     scaleMeters: 1.616e-35,
     name: 'Planck length',
     fact: 'Below this length, the very idea of distance stops making sense - space itself is thought to lose meaning at finer scales.',
+    image: '/scales/planck-length.png',
+    imageCredit: 'NASA/CXC/M. Weiss, public domain',
   },
   {
     id: 'proton',
@@ -58,6 +61,8 @@ export const SCALE_STOPS: ScaleStop[] = [
     scaleMeters: 1.68e-15,
     name: 'Proton',
     fact: 'A proton is about a hundred thousand times smaller than the atom it sits inside, itself built from three quarks bound by the strong force.',
+    image: '/scales/proton.png',
+    imageCredit: 'Arpad Horvath, CC BY-SA 4.0, Wikimedia Commons',
   },
   {
     id: 'hydrogen-atom',
@@ -65,6 +70,8 @@ export const SCALE_STOPS: ScaleStop[] = [
     scaleMeters: 1.0e-10,
     name: 'Hydrogen atom',
     fact: 'The simplest atom: one proton, one electron, and mostly empty space - if the nucleus were a marble, the electron would orbit a mile away.',
+    image: '/scales/hydrogen-atom.png',
+    imageCredit: 'PoorLeno, CC BY-SA 3.0, Wikimedia Commons',
   },
   {
     id: 'dna-helix',
@@ -72,20 +79,26 @@ export const SCALE_STOPS: ScaleStop[] = [
     scaleMeters: 2.0e-9,
     name: 'DNA helix',
     fact: 'The double helix is about 2 nanometers wide, yet the DNA in a single human cell, uncoiled, would stretch roughly two meters.',
+    image: '/scales/dna-helix.jpg',
+    imageCredit: 'Zephyris, CC BY-SA 3.0, Wikimedia Commons',
   },
   {
-    id: 'virus',
-    exponent: -7,
-    scaleMeters: 1.2e-7,
-    name: 'Virus',
-    fact: 'Most viruses are too small to see with a light microscope - a few thousand laid end to end would barely cross a human hair.',
+    id: 'rhinovirus',
+    exponent: -8,
+    scaleMeters: 3.0e-8,
+    name: 'Rhinovirus',
+    fact: 'The virus behind most common colds is barely 30 nanometers across - small enough that millions could fit inside a single human cell.',
+    image: '/scales/rhinovirus.jpg',
+    imageCredit: 'CDC Public Health Image Library, public domain',
   },
   {
-    id: 'red-blood-cell',
+    id: 'amoeba',
     exponent: -5,
-    scaleMeters: 7.5e-6,
-    name: 'Red blood cell',
-    fact: 'About 25 trillion of these disks circulate in an adult body, each one small enough that a hundred could fit across a single grain of salt.',
+    scaleMeters: 1.5e-5,
+    name: 'Amoeba',
+    fact: 'Amoebas are shape-shifting single cells that move by flowing their own body forward - the smallest free-living species are barely bigger than a human red blood cell.',
+    image: '/scales/amoeba.jpg',
+    imageCredit: 'Patrick J. Lynch, CC BY-SA 3.0, Wikimedia Commons',
   },
   // Human (6-11)
   {
@@ -94,20 +107,17 @@ export const SCALE_STOPS: ScaleStop[] = [
     scaleMeters: 7.0e-5,
     name: 'Human hair',
     fact: 'A single strand is roughly 70 microns across - thin enough that early microscopists used hair width as their everyday ruler.',
+    image: '/scales/human-hair.jpg',
+    imageCredit: 'Jan Homann, CC BY-SA 3.0, Wikimedia Commons',
   },
   {
-    id: 'grain-of-sand',
-    exponent: -3,
-    scaleMeters: 5.0e-4,
-    name: 'Grain of sand',
-    fact: 'A typical grain is half a millimeter, worn down over centuries from rock, shell, or coral into something small enough to slip through your fingers.',
-  },
-  {
-    id: 'apple',
-    exponent: -1,
-    scaleMeters: 8.0e-2,
-    name: 'Apple',
-    fact: 'An ordinary apple, held in one hand, sits almost exactly at the geometric midpoint between the width of an atom and the width of the observable universe.',
+    id: 'ant',
+    exponent: -2,
+    scaleMeters: 5.0e-3,
+    name: 'Ant',
+    fact: 'A typical ant is about five millimeters long, yet can carry many times its own body weight - relative strength that shrinks away as an animal grows larger.',
+    image: '/scales/ant.jpg',
+    imageCredit: 'USDA, public domain',
   },
   {
     id: 'human',
@@ -115,6 +125,8 @@ export const SCALE_STOPS: ScaleStop[] = [
     scaleMeters: 1.7,
     name: 'Human being',
     fact: 'At roughly 1.7 meters, a person is the reference point the entire rest of this journey scales against - the only stop measured in a single, whole unit.',
+    image: '/scales/human.jpg',
+    imageCredit: 'NASA Pioneer plaque, public domain',
   },
   {
     id: 'blue-whale',
@@ -122,6 +134,8 @@ export const SCALE_STOPS: ScaleStop[] = [
     scaleMeters: 27,
     name: 'Blue whale',
     fact: 'The largest animal known to have ever lived, longer than three school buses, with a heart alone the size of a small car.',
+    image: '/scales/blue-whale.jpg',
+    imageCredit: 'NOAA Photo Library, public domain',
   },
   {
     id: 'mount-everest',
@@ -129,21 +143,27 @@ export const SCALE_STOPS: ScaleStop[] = [
     scaleMeters: 8849,
     name: 'Mount Everest',
     fact: "Earth's tallest peak rises about 8.8 kilometers above sea level - tall enough to graze the cruising altitude of a commercial jet.",
+    image: '/scales/everest.jpg',
+    imageCredit: 'shrimpo1967, CC BY-SA 2.0, Wikimedia Commons',
   },
-  // Cosmic (12-17)
   {
     id: 'earth',
     exponent: 7,
     scaleMeters: 1.2742e7,
     name: 'Earth',
     fact: "Our planet's diameter is about 12,700 kilometers - light circles it roughly seven and a half times in a single second.",
+    image: '/scales/earth.jpg',
+    imageCredit: 'NASA Apollo 17, public domain',
   },
+  // Cosmic (12-17)
   {
     id: 'sun',
     exponent: 9,
     scaleMeters: 1.3914e9,
     name: 'Sun',
     fact: 'A hundred and nine Earths could be lined up across the face of the Sun, and light takes about eight minutes to cross the distance to us.',
+    image: '/scales/sun.jpg',
+    imageCredit: 'NASA/SDO, public domain',
   },
   {
     id: 'solar-system',
@@ -151,6 +171,17 @@ export const SCALE_STOPS: ScaleStop[] = [
     scaleMeters: 9.0e12,
     name: 'Solar System',
     fact: "Out to Neptune's orbit, the Solar System spans about nine trillion meters - and even that is a small fraction of the way to the nearest star.",
+    image: '/scales/solar-system.jpg',
+    imageCredit: 'NASA, public domain',
+  },
+  {
+    id: 'proxima-centauri',
+    exponent: 17,
+    scaleMeters: 4.0135e16,
+    name: 'Proxima Centauri',
+    fact: "The Sun's nearest stellar neighbor lies about 4.24 light-years away - light that crosses the entire Solar System in hours takes over four years to make this one hop.",
+    image: '/scales/proxima-centauri.jpg',
+    imageCredit: 'ESA/Hubble & NASA, public domain',
   },
   {
     id: 'milky-way',
@@ -158,13 +189,17 @@ export const SCALE_STOPS: ScaleStop[] = [
     scaleMeters: 9.461e20,
     name: 'Milky Way',
     fact: 'Our home galaxy holds a few hundred billion stars in a disk about 100,000 light-years across, one of which is our own.',
+    image: '/scales/milky-way.jpg',
+    imageCredit: 'ESO/Y. Beletsky, CC BY 4.0',
   },
   {
-    id: 'virgo-supercluster',
+    id: 'local-group',
     exponent: 23,
-    scaleMeters: 3.12e23,
-    name: 'Virgo Supercluster',
-    fact: 'The Milky Way is one of roughly a hundred galaxy groups bound loosely together into this supercluster, itself just one thread in a larger cosmic web.',
+    scaleMeters: 9.257e22,
+    name: 'Local Group',
+    fact: 'The Milky Way belongs to a neighborhood of roughly 80 galaxies called the Local Group, spanning about ten million light-years before the next supercluster begins.',
+    image: '/scales/local-group.jpg',
+    imageCredit: 'Antonio Ciccolella, CC BY-SA 3.0, Wikimedia Commons',
   },
   {
     id: 'observable-universe',
@@ -172,6 +207,8 @@ export const SCALE_STOPS: ScaleStop[] = [
     scaleMeters: 8.8e26,
     name: 'Observable Universe',
     fact: "The farthest we can see in any direction, limited not by our instruments but by the age of the universe itself - light hasn't had time to reach us from any farther.",
+    image: '/scales/observable-universe.jpg',
+    imageCredit: 'Pablo Carlos Budassi, CC BY-SA 4.0, Wikimedia Commons',
   },
 ];
 

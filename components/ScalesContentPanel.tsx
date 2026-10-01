@@ -27,6 +27,7 @@ export default function ScalesContentPanel({ stop, isMobile }: ScalesContentPane
       {(!isMobile || expanded) && (
         <>
           <p className="scales-panel-fact">{stop.fact}</p>
+          {stop.imageCredit && <p className="scales-panel-credit">Image: {stop.imageCredit}</p>}
           {stop.quote && (
             <div className="scales-panel-quote-block">
               <p className="scales-panel-quote">&ldquo;{stop.quote}&rdquo;</p>
@@ -87,6 +88,12 @@ export default function ScalesContentPanel({ stop, isMobile }: ScalesContentPane
           max-width: 36ch;
           line-height: 1.5;
           margin: 0;
+        }
+        .scales-panel-credit {
+          font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+          font-size: 11px;
+          color: rgba(255, 255, 255, 0.4);
+          margin: 8px 0 0 0;
         }
         .scales-panel-quote-block {
           margin-top: 20px;
