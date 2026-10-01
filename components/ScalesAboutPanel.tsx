@@ -67,8 +67,11 @@ export default function ScalesAboutPanel({ onClose }: ScalesAboutPanelProps) {
       </div>
 
       <p style={{ marginTop: 12, color: 'rgba(232, 236, 245, 0.85)' }}>
-        A powers-of-ten journey from the Planck length to the observable universe, in the spirit
-        of Alan Lightman&apos;s <em>Searching for Stars on an Island in Maine</em> (2018).
+        A horizontal journey through 61 orders of magnitude, from the Planck length to the
+        observable universe, in the spirit of Alan Lightman&apos;s{' '}
+        <em>Searching for Stars on an Island in Maine</em> (2018). Scroll, drag, or press space to
+        travel the ruler - every image is drawn true to its relative size. Use &ldquo;Compare
+        to&hellip;&rdquo; to put any two stops side by side.
       </p>
 
       <p style={{ color: 'rgba(232, 236, 245, 0.5)', fontSize: 11, marginBottom: 4 }}>

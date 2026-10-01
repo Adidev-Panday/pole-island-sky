@@ -1,44 +1,86 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useIsMobile } from '@/hooks/useIsMobile';
 import {
   SCALE_STOPS,
-  SCALE_GROUP_SIZE,
-  SCALE_GROUP_LABELS,
-  backgroundColorForStop,
+  buildScaleLayout,
+  buildGridlines,
+  localTicks,
+  dominantIndexForX,
+  mppAtX,
+  imageHeightAtMpp,
+  scaleLabelPlainText,
   placeholderImageUrl,
   stopIndexFromId,
+  backgroundGradientForTrack,
+  parseCompareParam,
+  compareParamForIds,
+  HUMAN_HEIGHT_METERS,
+  HUMAN_DOT_THRESHOLD_PX,
+  type GridlineInfo,
 } from '@/lib/scales';
+import ScalesContentPanel from '@/components/ScalesContentPanel';
+import ScalesProgressRail from '@/components/ScalesProgressRail';
+import ScalesComparePicker from '@/components/ScalesComparePicker';
+import ScalesCompareView from '@/components/ScalesCompareView';
 import ScalesAboutPanel from '@/components/ScalesAboutPanel';
 
 const STOP_COUNT = SCALE_STOPS.length;
-const IMAGE_PRELOAD_RADIUS = 2;
-// How much the image shrinks/fades at a full viewport-height's distance from
-// center - a continuous function of scroll position, not a timed animation,
-// so its "duration" is however long the browser's own scroll/snap takes.
-const SCALE_SHRINK_RANGE = 0.35;
-const OPACITY_FADE_RANGE = 0.55;
-const URL_PARAM = 'stop';
+const IMAGE_MIN_PX = 2;
+const IMAGE_MAX_PX = 8000;
+const AUTOPLAY_SPEED_PX_PER_SEC = 220;
+const AUTOPLAY_PAUSE_MS = 900;
+const AUTOPLAY_PAUSE_EPSILON_PX = 4;
+const STOP_PARAM = 'stop';
+const COMPARE_PARAM = 'compare';
+const HUMAN_SILHOUETTE_ASPECT = 0.29;
 
 export default function ScalesExperience() {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const sectionRefs = useRef<Array<HTMLElement | null>>([]);
-  const imageWrapRefs = useRef<Array<HTMLDivElement | null>>([]);
-
-  const [activeIndex, setActiveIndex] = useState(0);
-  const [aboutOpen, setAboutOpen] = useState(false);
-  const [hasScrolled, setHasScrolled] = useState(false);
-  const [reducedMotion, setReducedMotion] = useState(false);
-  const [hoveredTick, setHoveredTick] = useState<number | null>(null);
-  const [brokenImageIndices, setBrokenImageIndices] = useState<ReadonlySet<number>>(new Set());
+  const layout = useMemo(() => buildScaleLayout(SCALE_STOPS), []);
+  const gridlines = useMemo(() => buildGridlines(layout), [layout]);
   const isMobile = useIsMobile();
 
-  const activeIndexRef = useRef(activeIndex);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const imageRefs = useRef<Array<HTMLImageElement | null>>([]);
+  const humanRef = useRef<HTMLDivElement>(null);
+  const humanCaptionRef = useRef<HTMLDivElement>(null);
+
+  const [dominantIndex, setDominantIndex] = useState(0);
+  const [ticks, setTicks] = useState<GridlineInfo[]>([]);
+  const [compareIndices, setCompareIndices] = useState<[number, number] | null>(null);
+  const [autoplay, setAutoplay] = useState(false);
+  const [hasInteracted, setHasInteracted] = useState(false);
+  const [aboutOpen, setAboutOpen] = useState(false);
+  const [reducedMotion, setReducedMotion] = useState(false);
+  const [brokenImageIndices, setBrokenImageIndices] = useState<ReadonlySet<number>>(new Set());
+
+  const dominantIndexRef = useRef(dominantIndex);
   useEffect(() => {
-    activeIndexRef.current = activeIndex;
-  }, [activeIndex]);
+    dominantIndexRef.current = dominantIndex;
+  }, [dominantIndex]);
+
+  const compareIndicesRef = useRef(compareIndices);
+  useEffect(() => {
+    compareIndicesRef.current = compareIndices;
+  }, [compareIndices]);
+
+  const anchorIndexRef = useRef(0);
+  const pendingScrollIndexRef = useRef<number | null>(null);
+  const autoplayStateRef = useRef({ active: false, pausedUntil: 0, lastPausedIndex: -1, lastTs: 0 });
+
+  // Consumes a pending jump queued while compare mode was closing (the
+  // scroll container unmounts during compare mode, so we can't scroll it
+  // until it's back in the DOM on the next render).
+  useEffect(() => {
+    if (compareIndices) return;
+    if (pendingScrollIndexRef.current === null) return;
+    const target = pendingScrollIndexRef.current;
+    pendingScrollIndexRef.current = null;
+    scrollRef.current?.scrollTo({ left: layout.xs[Math.max(0, Math.min(STOP_COUNT - 1, target))], behavior: 'auto' });
+    setDominantIndex(Math.max(0, Math.min(STOP_COUNT - 1, target)));
+  }, [compareIndices, layout]);
 
   useEffect(() => {
     const query = window.matchMedia('(prefers-reduced-motion: reduce)');
@@ -48,95 +90,201 @@ export default function ScalesExperience() {
     return () => query.removeEventListener('change', handleChange);
   }, []);
 
-  // ?stop=<id> on mount - jump instantly (no animation) so a reload lands
-  // exactly where it left off.
+  const scrollToIndex = useCallback(
+    (index: number, behavior: ScrollBehavior = 'smooth') => {
+      const clamped = Math.max(0, Math.min(STOP_COUNT - 1, index));
+      scrollRef.current?.scrollTo({
+        left: layout.xs[clamped],
+        behavior: reducedMotion ? 'auto' : behavior,
+      });
+    },
+    [layout, reducedMotion]
+  );
+
+  // ?stop=<id> / ?compare=<id1>,<id2> on mount.
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    const index = stopIndexFromId(params.get(URL_PARAM));
-    if (index === 0) return;
-    setActiveIndex(index);
-    const el = sectionRefs.current[index];
-    el?.scrollIntoView({ behavior: 'auto', block: 'start' });
+    const compare = parseCompareParam(params.get(COMPARE_PARAM));
+    if (compare) {
+      anchorIndexRef.current = compare[0];
+      setCompareIndices(compare);
+      setDominantIndex(compare[0]);
+      scrollToIndex(compare[0], 'auto');
+      return;
+    }
+    const index = stopIndexFromId(params.get(STOP_PARAM));
+    setDominantIndex(index);
+    scrollToIndex(index, 'auto');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Keep the URL in sync without navigating or polluting browser history.
   useEffect(() => {
     const url = new URL(window.location.href);
-    url.searchParams.set(URL_PARAM, SCALE_STOPS[activeIndex].id);
+    if (compareIndices) {
+      url.searchParams.set(
+        COMPARE_PARAM,
+        compareParamForIds(SCALE_STOPS[compareIndices[0]].id, SCALE_STOPS[compareIndices[1]].id)
+      );
+      url.searchParams.delete(STOP_PARAM);
+    } else {
+      url.searchParams.set(STOP_PARAM, SCALE_STOPS[dominantIndex].id);
+      url.searchParams.delete(COMPARE_PARAM);
+    }
     window.history.replaceState(null, '', url);
-  }, [activeIndex]);
+  }, [dominantIndex, compareIndices]);
 
-  // Preload the next/previous 2 stop images so they don't pop in.
-  useEffect(() => {
-    for (let i = activeIndex - IMAGE_PRELOAD_RADIUS; i <= activeIndex + IMAGE_PRELOAD_RADIUS; i++) {
-      if (i < 0 || i >= STOP_COUNT || i === activeIndex) continue;
-      const img = new window.Image();
-      img.src = placeholderImageUrl(SCALE_STOPS[i]);
-    }
-  }, [activeIndex]);
-
-  // Scroll-position-driven zoom transition + "which stop is active" tracking.
-  // Deliberately has no CSS transition and no timer on the transform itself -
-  // it's recomputed from the live scroll offset every frame, so its pacing
-  // is exactly the browser's own scroll/snap physics.
-  useEffect(() => {
-    const container = containerRef.current;
-    if (!container) return;
-    let rafId = 0;
-    let scheduled = false;
-
-    function update() {
-      scheduled = false;
-      const viewportCenter = window.innerHeight / 2;
-      let nearestIndex = 0;
-      let nearestDist = Infinity;
-
-      sectionRefs.current.forEach((section, i) => {
-        if (!section) return;
-        const rect = section.getBoundingClientRect();
-        const dist = Math.abs(rect.top + rect.height / 2 - viewportCenter);
-        if (dist < nearestDist) {
-          nearestDist = dist;
-          nearestIndex = i;
-        }
-
-        const wrap = imageWrapRefs.current[i];
-        if (!wrap) return;
-        const normalized = Math.min(1, dist / window.innerHeight);
-        if (reducedMotion) {
-          wrap.style.transform = 'none';
-        } else {
-          wrap.style.transform = `scale(${1 - normalized * SCALE_SHRINK_RANGE})`;
-        }
-        wrap.style.opacity = String(1 - normalized * OPACITY_FADE_RANGE);
-      });
-
-      setActiveIndex((prev) => (prev === nearestIndex ? prev : nearestIndex));
-    }
-
-    function onScrollOrResize() {
-      if (!scheduled) {
-        scheduled = true;
-        rafId = requestAnimationFrame(update);
-      }
-    }
-
-    update();
-    container.addEventListener('scroll', onScrollOrResize, { passive: true });
-    window.addEventListener('resize', onScrollOrResize);
-    return () => {
-      cancelAnimationFrame(rafId);
-      container.removeEventListener('scroll', onScrollOrResize);
-      window.removeEventListener('resize', onScrollOrResize);
-    };
-  }, [reducedMotion]);
-
-  const scrollToStop = useCallback((index: number, behavior: ScrollBehavior = 'smooth') => {
-    const clamped = Math.max(0, Math.min(STOP_COUNT - 1, index));
-    sectionRefs.current[clamped]?.scrollIntoView({ behavior, block: 'start' });
+  const stopAutoplay = useCallback(() => {
+    setAutoplay(false);
   }, []);
 
-  // Arrow keys move by 1 stop, page keys by 3, home/end jump to the ends.
+  useEffect(() => {
+    autoplayStateRef.current.active = autoplay;
+    if (autoplay) autoplayStateRef.current.lastPausedIndex = -1;
+  }, [autoplay]);
+
+  // Main per-frame loop: drives autoplay, recomputes the dominant stop and
+  // the ruler's meters-per-pixel from the live scroll position, and
+  // imperatively sizes every image + the human silhouette - no CSS
+  // transition, no timer: its pacing is exactly scroll/rAF physics.
+  useEffect(() => {
+    if (compareIndices) return;
+    const el = scrollRef.current;
+    if (!el) return;
+    let rafId = 0;
+
+    function frame(ts: number) {
+      const state = autoplayStateRef.current;
+      if (state.active && el) {
+        if (ts >= state.pausedUntil) {
+          const dt = state.lastTs ? (ts - state.lastTs) / 1000 : 0;
+          el.scrollLeft += AUTOPLAY_SPEED_PX_PER_SEC * dt;
+          if (el.scrollLeft >= layout.totalWidth - 0.5) {
+            setAutoplay(false);
+            state.active = false;
+          }
+        }
+        state.lastTs = ts;
+      } else {
+        state.lastTs = 0;
+      }
+
+      if (el) {
+        const centerX = el.scrollLeft;
+        const mpp = mppAtX(layout, centerX);
+        const nearest = dominantIndexForX(layout, centerX);
+
+        for (let i = 0; i < SCALE_STOPS.length; i++) {
+          const img = imageRefs.current[i];
+          if (!img) continue;
+          const heightPx = Math.max(IMAGE_MIN_PX, Math.min(IMAGE_MAX_PX, imageHeightAtMpp(SCALE_STOPS[i], mpp)));
+          img.style.height = `${heightPx}px`;
+        }
+
+        const humanHeightPx = HUMAN_HEIGHT_METERS / mpp;
+        if (humanRef.current && humanCaptionRef.current) {
+          const isDot = humanHeightPx < HUMAN_DOT_THRESHOLD_PX;
+          const clamped = isDot ? 2 : Math.min(IMAGE_MAX_PX, humanHeightPx);
+          humanRef.current.style.height = `${clamped}px`;
+          humanRef.current.style.width = `${clamped * HUMAN_SILHOUETTE_ASPECT}px`;
+          humanCaptionRef.current.style.display = isDot ? 'block' : 'none';
+        }
+
+        if (state.active) {
+          if (Math.abs(layout.xs[nearest] - centerX) < AUTOPLAY_PAUSE_EPSILON_PX && nearest !== state.lastPausedIndex) {
+            state.pausedUntil = ts + AUTOPLAY_PAUSE_MS;
+            state.lastPausedIndex = nearest;
+          }
+        }
+
+        if (nearest !== dominantIndexRef.current) {
+          setDominantIndex(nearest);
+          const viewportWidth = window.innerWidth;
+          setTicks(localTicks(layout, centerX, mpp, viewportWidth));
+        }
+      }
+
+      rafId = requestAnimationFrame(frame);
+    }
+
+    rafId = requestAnimationFrame(frame);
+    return () => cancelAnimationFrame(rafId);
+  }, [layout, compareIndices]);
+
+  // Initial tick computation (the rAF loop above only recomputes on a
+  // dominant-stop change, which hasn't happened yet on first paint).
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const mpp = mppAtX(layout, el.scrollLeft);
+    setTicks(localTicks(layout, el.scrollLeft, mpp, window.innerWidth));
+  }, [layout]);
+
+  // Mouse wheel (vertical or horizontal) + hijacked trackpad swipe -> horizontal scroll.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    function onWheel(e: WheelEvent) {
+      if (compareIndicesRef.current) return;
+      e.preventDefault();
+      const delta = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
+      el!.scrollLeft += delta;
+      stopAutoplay();
+      setHasInteracted(true);
+    }
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  }, [stopAutoplay]);
+
+  // Click-and-drag on the background to scroll.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    let dragging = false;
+    let startX = 0;
+    let startScrollLeft = 0;
+
+    function onDown(e: MouseEvent) {
+      if (compareIndicesRef.current) return;
+      if ((e.target as HTMLElement).closest('button, a, input')) return;
+      dragging = true;
+      startX = e.clientX;
+      startScrollLeft = el!.scrollLeft;
+      el!.style.cursor = 'grabbing';
+    }
+    function onMove(e: MouseEvent) {
+      if (!dragging) return;
+      el!.scrollLeft = startScrollLeft - (e.clientX - startX);
+      stopAutoplay();
+      setHasInteracted(true);
+    }
+    function onUp() {
+      if (!dragging) return;
+      dragging = false;
+      el!.style.cursor = '';
+    }
+    el.addEventListener('mousedown', onDown);
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    return () => {
+      el.removeEventListener('mousedown', onDown);
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+  }, [stopAutoplay]);
+
+  // First scroll/touch input dismisses the hint for good.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    function dismiss() {
+      setHasInteracted(true);
+    }
+    el.addEventListener('touchmove', dismiss, { passive: true, once: true });
+    return () => el.removeEventListener('touchmove', dismiss);
+  }, []);
+
+  // Arrow/Home/End navigation + spacebar autoplay toggle.
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
       const target = e.target as HTMLElement | null;
@@ -144,21 +292,22 @@ export default function ScalesExperience() {
         return;
       }
 
+      if (e.key === ' ' || e.code === 'Space') {
+        e.preventDefault();
+        setAutoplay((v) => !v);
+        setHasInteracted(true);
+        return;
+      }
+
+      if (compareIndicesRef.current) return;
+
       let targetIndex: number | null = null;
       switch (e.key) {
-        case 'ArrowDown':
         case 'ArrowRight':
-          targetIndex = activeIndexRef.current + 1;
+          targetIndex = dominantIndexRef.current + (e.shiftKey ? 3 : 1);
           break;
-        case 'ArrowUp':
         case 'ArrowLeft':
-          targetIndex = activeIndexRef.current - 1;
-          break;
-        case 'PageDown':
-          targetIndex = activeIndexRef.current + 3;
-          break;
-        case 'PageUp':
-          targetIndex = activeIndexRef.current - 3;
+          targetIndex = dominantIndexRef.current - (e.shiftKey ? 3 : 1);
           break;
         case 'Home':
           targetIndex = 0;
@@ -170,31 +319,35 @@ export default function ScalesExperience() {
           return;
       }
       e.preventDefault();
-      setHasScrolled(true);
-      scrollToStop(targetIndex);
+      stopAutoplay();
+      setHasInteracted(true);
+      scrollToIndex(targetIndex);
     }
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [scrollToStop]);
+  }, [scrollToIndex, stopAutoplay]);
 
-  // First scroll/touch input fades the "Scroll to explore" hint for good.
-  useEffect(() => {
-    const container = containerRef.current;
-    if (!container) return;
-    function dismiss() {
-      setHasScrolled(true);
+  function handleRailJump(index: number) {
+    stopAutoplay();
+    setHasInteracted(true);
+    if (compareIndices) {
+      pendingScrollIndexRef.current = index;
+      setCompareIndices(null);
+    } else {
+      scrollToIndex(index);
     }
-    container.addEventListener('wheel', dismiss, { passive: true, once: true });
-    container.addEventListener('touchmove', dismiss, { passive: true, once: true });
-    return () => {
-      container.removeEventListener('wheel', dismiss);
-      container.removeEventListener('touchmove', dismiss);
-    };
-  }, []);
+  }
 
-  function handleTickClick(index: number) {
-    setHasScrolled(true);
-    scrollToStop(index);
+  function handleCompareSelect(stopId: string) {
+    const targetIndex = stopIndexFromId(stopId);
+    anchorIndexRef.current = dominantIndexRef.current;
+    stopAutoplay();
+    setCompareIndices([dominantIndexRef.current, targetIndex]);
+  }
+
+  function handleCompareClose() {
+    pendingScrollIndexRef.current = anchorIndexRef.current;
+    setCompareIndices(null);
   }
 
   function handleImageError(index: number) {
@@ -206,112 +359,115 @@ export default function ScalesExperience() {
     });
   }
 
+  const dominantStop = SCALE_STOPS[dominantIndex];
+
   return (
-    <div>
+    <div className="scales-root">
       <header className="scales-header">
         <div className="scales-header-title">Scales of Wonder</div>
-        <div className="scales-header-position">
-          {activeIndex + 1} / {STOP_COUNT}
-        </div>
         <div className="scales-header-right">
+          {!compareIndices && (
+            <ScalesComparePicker
+              stops={SCALE_STOPS}
+              anchorStopId={dominantStop.id}
+              onSelect={handleCompareSelect}
+              fullScreen={isMobile}
+            />
+          )}
           <Link href="/" className="scales-header-link">
             Sky
           </Link>
-          <button
-            onClick={() => setAboutOpen((v) => !v)}
-            aria-label="About"
-            className="scales-about-button"
-          >
+          <button onClick={() => setAboutOpen((v) => !v)} aria-label="About" className="scales-about-button">
             &#9432;
           </button>
         </div>
       </header>
 
-      <nav
-        className={isMobile ? 'scales-rail scales-rail-horizontal' : 'scales-rail scales-rail-vertical'}
-        aria-label="Scale stops"
-      >
-        {SCALE_STOPS.map((stop, i) => {
-          const groupIndex = i / SCALE_GROUP_SIZE;
-          const showGroupLabel = Number.isInteger(groupIndex);
-          return (
-            <div key={stop.id} className="scales-tick-group">
-              {showGroupLabel && (
-                <div className="scales-tick-label">{SCALE_GROUP_LABELS[groupIndex]}</div>
-              )}
-              <button
-                onClick={() => handleTickClick(i)}
-                onMouseEnter={() => setHoveredTick(i)}
-                onMouseLeave={() => setHoveredTick((h) => (h === i ? null : h))}
-                onFocus={() => setHoveredTick(i)}
-                onBlur={() => setHoveredTick((h) => (h === i ? null : h))}
-                aria-label={`Jump to ${stop.name}`}
-                aria-current={i === activeIndex}
-                className={`scales-tick${i === activeIndex ? ' scales-tick-active' : ''}`}
-              >
-                {hoveredTick === i && <span className="scales-tick-tooltip">{stop.name}</span>}
-              </button>
-            </div>
-          );
-        })}
-      </nav>
-
-      {!hasScrolled && <div className="scales-hint">Scroll to explore</div>}
-
       {aboutOpen && <ScalesAboutPanel onClose={() => setAboutOpen(false)} />}
 
-      <div ref={containerRef} className="scales-scroll">
-        {SCALE_STOPS.map((stop, i) => {
-          const isBroken = brokenImageIndices.has(i);
-          const src = isBroken ? placeholderImageUrl(stop) : stop.image ?? placeholderImageUrl(stop);
-          return (
-            <section
-              key={stop.id}
-              ref={(el) => {
-                sectionRefs.current[i] = el;
-              }}
-              className="scales-stop"
-              style={{ background: backgroundColorForStop(i) }}
-            >
-              <div className="scales-stop-inner">
-                <div className="scales-image-col">
-                  <div
-                    ref={(el) => {
-                      imageWrapRefs.current[i] = el;
-                    }}
-                    className="scales-image-wrap"
-                  >
-                    {/* eslint-disable-next-line @next/next/no-img-element -- dynamically generated per-stop placeholder, not a static asset */}
-                    <img
-                      src={src}
-                      alt={stop.name}
-                      className="scales-image"
-                      onError={() => handleImageError(i)}
-                    />
-                  </div>
-                  {isBroken && <div className="scales-image-missing">image missing</div>}
-                </div>
+      {!compareIndices && <ScalesContentPanel stop={dominantStop} isMobile={isMobile} />}
 
-                <div className="scales-text-col">
-                  <div className="scales-scale-label">
-                    10<sup>{stop.exponent}</sup> m
-                  </div>
-                  <h2 className="scales-name">{stop.name}</h2>
-                  <p className="scales-fact">{stop.fact}</p>
-                  {stop.quote && (
-                    <div className="scales-quote-block">
-                      <p className="scales-quote">&ldquo;{stop.quote}&rdquo;</p>
-                      {stop.attribution && <div className="scales-attribution">{stop.attribution}</div>}
-                    </div>
-                  )}
-                </div>
+      {!compareIndices && !hasInteracted && <div className="scales-hint">Scroll, drag, or press space &rarr;</div>}
+
+      {compareIndices ? (
+        <ScalesCompareView
+          stopA={SCALE_STOPS[compareIndices[0]]}
+          stopB={SCALE_STOPS[compareIndices[1]]}
+          onClose={handleCompareClose}
+        />
+      ) : (
+        <div ref={scrollRef} className="scales-scroll" tabIndex={0} aria-label="Scale ruler, scroll horizontally">
+          <div
+            className="scales-track"
+            style={{
+              width: `calc(100vw + ${layout.totalWidth}px)`,
+              background: backgroundGradientForTrack(SCALE_STOPS),
+            }}
+          >
+            <div className="scales-ground-line" />
+
+            {gridlines.map((g) => (
+              <div key={g.exponent} className="scales-gridline" style={{ left: `calc(50vw + ${g.x}px)` }}>
+                <div className="scales-gridline-tick" />
+                <div className="scales-gridline-label">{scaleLabelPlainText(g.exponent)}</div>
               </div>
-            </section>
-          );
-        })}
-      </div>
+            ))}
+
+            {ticks.map((t, i) => (
+              <div key={`${t.exponent}-${i}`} className="scales-minor-tick" style={{ left: `calc(50vw + ${t.x}px)` }} />
+            ))}
+
+            {SCALE_STOPS.map((stop, i) => {
+              const isBroken = brokenImageIndices.has(i);
+              const src = isBroken ? placeholderImageUrl(stop) : stop.image ?? placeholderImageUrl(stop);
+              return (
+                <div key={stop.id} className="scales-stop-anchor" style={{ left: `calc(50vw + ${layout.xs[i]}px)` }}>
+                  {/* eslint-disable-next-line @next/next/no-img-element -- dynamically generated per-stop placeholder, not a static asset */}
+                  <img
+                    ref={(el) => {
+                      imageRefs.current[i] = el;
+                    }}
+                    src={src}
+                    alt={stop.name}
+                    draggable={false}
+                    className="scales-stop-image"
+                    onError={() => handleImageError(i)}
+                  />
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {!compareIndices && (
+        <div className="scales-human-wrap">
+          <div ref={humanRef} className="scales-human" aria-hidden="true">
+            <svg viewBox="0 0 100 340" width="100%" height="100%" preserveAspectRatio="none">
+              <circle cx="50" cy="32" r="30" fill="#ffffff" />
+              <path
+                d="M30 68 C10 80 8 150 14 210 L26 210 L34 340 L46 340 L50 220 L54 340 L66 340 L74 210 L86 210 C92 150 90 80 70 68 C60 62 40 62 30 68 Z"
+                fill="#ffffff"
+              />
+            </svg>
+          </div>
+          <div ref={humanCaptionRef} className="scales-human-caption" style={{ display: 'none' }}>
+            human (invisible at this scale)
+          </div>
+        </div>
+      )}
+
+      <ScalesProgressRail stops={SCALE_STOPS} dominantIndex={dominantIndex} onJump={handleRailJump} />
 
       <style jsx>{`
+        .scales-root {
+          position: relative;
+          height: 100dvh;
+          overflow: hidden;
+          background: #05060f;
+          font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        }
+
         .scales-header {
           position: fixed;
           top: 0;
@@ -322,23 +478,14 @@ export default function ScalesExperience() {
           align-items: center;
           justify-content: space-between;
           padding: 16px 24px;
-          background: rgba(5, 6, 15, 0.5);
+          background: rgba(5, 6, 15, 0.78);
           backdrop-filter: blur(10px);
           -webkit-backdrop-filter: blur(10px);
-          font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
         }
         .scales-header-title {
           font-family: Georgia, 'Times New Roman', serif;
           font-size: 16px;
           color: #e8ecf5;
-        }
-        .scales-header-position {
-          font-family: var(--font-geist-mono, monospace);
-          font-size: 13px;
-          color: rgba(232, 236, 245, 0.6);
-          position: absolute;
-          left: 50%;
-          transform: translateX(-50%);
         }
         .scales-header-right {
           display: flex;
@@ -371,16 +518,14 @@ export default function ScalesExperience() {
 
         .scales-hint {
           position: fixed;
-          bottom: 40px;
+          bottom: 92px;
           left: 50%;
           transform: translateX(-50%);
           z-index: 25;
           font-size: 13px;
           color: rgba(232, 236, 245, 0.55);
-          font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
           pointer-events: none;
           animation: scales-pulse 2.2s ease-in-out infinite;
-          transition: opacity 0.6s ease;
         }
         @keyframes scales-pulse {
           0%,
@@ -393,235 +538,110 @@ export default function ScalesExperience() {
         }
 
         .scales-scroll {
-          height: 100vh;
-          overflow-y: scroll;
-          scroll-snap-type: y mandatory;
-          -webkit-overflow-scrolling: touch;
-        }
-        .scales-stop {
-          height: 100vh;
-          width: 100%;
-          scroll-snap-align: start;
-          scroll-snap-stop: always;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          overflow: hidden;
-        }
-        .scales-stop-inner {
-          width: 100%;
-          max-width: 1400px;
           height: 100%;
+          overflow-x: scroll;
+          overflow-y: hidden;
+          -webkit-overflow-scrolling: touch;
+          cursor: grab;
+          scrollbar-width: none;
+        }
+        .scales-scroll::-webkit-scrollbar {
+          display: none;
+        }
+        .scales-track {
+          position: relative;
+          height: 100%;
+        }
+        .scales-ground-line {
+          position: absolute;
+          left: 0;
+          right: 0;
+          top: 70%;
+          height: 1px;
+          background: rgba(255, 255, 255, 0.15);
+        }
+        .scales-gridline {
+          position: absolute;
+          top: 0;
+          bottom: 0;
+          width: 1px;
+        }
+        .scales-gridline-tick {
+          position: absolute;
+          top: 0;
+          bottom: 0;
+          width: 1px;
+          background: rgba(255, 255, 255, 0.08);
+        }
+        .scales-gridline-label {
+          position: absolute;
+          bottom: 56px;
+          left: 8px;
+          font-family: var(--font-geist-mono, monospace);
+          font-size: 11px;
+          color: rgba(255, 255, 255, 0.3);
+          white-space: nowrap;
+        }
+        .scales-minor-tick {
+          position: absolute;
+          top: calc(70% - 6px);
+          width: 1px;
+          height: 12px;
+          background: rgba(255, 255, 255, 0.25);
+        }
+        .scales-stop-anchor {
+          position: absolute;
+          top: 70%;
+          transform: translate(-50%, -100%);
           display: flex;
-          align-items: center;
-          padding: 0 64px;
-          gap: 48px;
-          box-sizing: border-box;
+          align-items: flex-end;
+          pointer-events: none;
         }
-        .scales-image-col {
-          width: 60%;
-          display: flex;
-          flex-direction: column;
-          align-items: center;
-          justify-content: center;
-        }
-        .scales-image-wrap {
-          display: inline-flex;
-          will-change: transform, opacity;
-        }
-        .scales-image {
+        .scales-stop-image {
           display: block;
-          max-width: 100%;
-          max-height: 80vh;
           width: auto;
-          height: auto;
           object-fit: contain;
           border-radius: 6px;
           box-shadow: 0 0 110px 36px rgba(0, 0, 0, 0.4);
         }
-        .scales-image-missing {
-          margin-top: 12px;
-          font-size: 11px;
-          color: rgba(232, 236, 245, 0.4);
-          font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-        }
 
-        .scales-text-col {
-          width: 40%;
-          display: flex;
-          flex-direction: column;
-          justify-content: center;
-          font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-        }
-        .scales-scale-label {
-          font-family: var(--font-geist-mono, monospace);
-          font-size: 20px;
-          color: rgba(232, 236, 245, 0.5);
-          margin-bottom: 8px;
-        }
-        .scales-scale-label sup {
-          font-size: 0.65em;
-          vertical-align: super;
-        }
-        .scales-name {
-          font-family: Georgia, 'Times New Roman', serif;
-          font-size: 56px;
-          color: #ffffff;
-          margin: 0 0 20px 0;
-          font-weight: 400;
-          line-height: 1.05;
-        }
-        .scales-fact {
-          font-size: 18px;
-          color: #c8ccd6;
-          max-width: 40ch;
-          line-height: 1.55;
-          margin: 0;
-        }
-        .scales-quote-block {
-          margin-top: 28px;
-          padding-left: 20px;
-          border-left: 2px solid rgba(232, 236, 245, 0.2);
-        }
-        .scales-quote {
-          font-family: Georgia, 'Times New Roman', serif;
-          font-style: italic;
-          font-size: 22px;
-          color: #e8ecf5;
-          margin: 0;
-          line-height: 1.4;
-        }
-        .scales-attribution {
-          margin-top: 8px;
-          font-size: 13px;
-          color: rgba(232, 236, 245, 0.5);
-        }
-
-        .scales-rail {
+        .scales-human-wrap {
           position: fixed;
-          z-index: 20;
-        }
-        .scales-rail-vertical {
-          top: 50%;
-          right: 20px;
-          transform: translateY(-50%);
+          left: 24px;
+          top: 70%;
+          z-index: 15;
           display: flex;
           flex-direction: column;
-          align-items: flex-end;
-          gap: 10px;
-        }
-        .scales-rail-horizontal {
-          left: 0;
-          right: 0;
-          bottom: 0;
-          padding: 10px 16px;
-          background: rgba(5, 6, 15, 0.55);
-          backdrop-filter: blur(10px);
-          -webkit-backdrop-filter: blur(10px);
-          display: flex;
-          flex-direction: row;
           align-items: center;
-          justify-content: center;
-          gap: 6px;
-          overflow-x: auto;
-        }
-        .scales-tick-group {
-          position: relative;
-          display: flex;
-          flex-direction: column;
-          align-items: flex-end;
-        }
-        .scales-rail-horizontal .scales-tick-group {
-          flex-direction: row;
-          align-items: center;
-        }
-        .scales-tick-label {
-          font-size: 9px;
-          letter-spacing: 0.08em;
-          text-transform: uppercase;
-          color: rgba(232, 236, 245, 0.4);
-          margin-bottom: 4px;
-          font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-        }
-        .scales-rail-horizontal .scales-tick-label {
-          margin-bottom: 0;
-          margin-right: 4px;
-        }
-        .scales-tick {
-          position: relative;
-          width: 16px;
-          height: 2px;
-          border: none;
-          padding: 0;
-          cursor: pointer;
-          background: rgba(255, 255, 255, 0.2);
-        }
-        .scales-tick-active {
-          width: 22px;
-          background: #e8ecf5;
-        }
-        .scales-rail-horizontal .scales-tick {
-          width: 2px;
-          height: 14px;
-        }
-        .scales-rail-horizontal .scales-tick-active {
-          height: 20px;
-        }
-        .scales-tick-tooltip {
-          position: absolute;
-          right: calc(100% + 10px);
-          top: 50%;
-          transform: translateY(-50%);
-          white-space: nowrap;
-          background: rgba(5, 6, 15, 0.9);
-          border: 1px solid rgba(255, 255, 255, 0.12);
-          color: #e8ecf5;
-          font-size: 12px;
-          padding: 4px 8px;
-          border-radius: 3px;
-          font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+          transform: translateY(-100%);
           pointer-events: none;
         }
-        .scales-rail-horizontal .scales-tick-tooltip {
-          right: auto;
-          left: 50%;
-          top: auto;
-          bottom: calc(100% + 8px);
-          transform: translateX(-50%);
+        .scales-human {
+          display: block;
+          filter: drop-shadow(0 0 16px rgba(255, 255, 255, 0.3));
+        }
+        .scales-human-caption {
+          margin-top: 8px;
+          font-size: 11px;
+          color: rgba(232, 236, 245, 0.5);
+          white-space: nowrap;
         }
 
         @media (max-width: 600px) {
-          .scales-stop-inner {
-            flex-direction: column;
-            padding: 90px 24px 100px;
-            gap: 20px;
-            justify-content: center;
+          .scales-header-title {
+            font-size: 14px;
           }
-          .scales-image-col,
-          .scales-text-col {
-            width: 100%;
-          }
-          .scales-image {
-            max-height: 42vh;
-          }
-          .scales-name {
-            font-size: 34px;
-          }
-          .scales-fact {
-            font-size: 15px;
-            max-width: none;
-          }
-          .scales-header-position {
-            display: none;
-          }
-          .scales-hint {
-            bottom: 76px;
+          .scales-human-wrap {
+            left: 12px;
           }
         }
 
         @media (prefers-reduced-motion: reduce) {
           .scales-hint {
             animation: none;
+          }
+          .scales-stop-image {
+            transition: none;
           }
         }
       `}</style>
