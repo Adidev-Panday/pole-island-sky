@@ -52,7 +52,7 @@ export default function AboutPanel({ onClose }: AboutPanelProps) {
       }}
     >
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-        <h2 style={{ fontSize: 16, fontWeight: 600, margin: 0 }}>Pole Island Sky</h2>
+        <h2 style={{ fontSize: 16, fontWeight: 600, margin: 0 }}>Stars In Maine</h2>
         <button
           onClick={onClose}
           aria-label="Close"
@@ -71,19 +71,10 @@ export default function AboutPanel({ onClose }: AboutPanelProps) {
       </div>
 
       <p style={{ marginTop: 12, color: 'rgba(232, 236, 245, 0.85)' }}>
-        A recreation of the night sky Alan Lightman describes from his island in Casco
-        Bay, Maine, in <em>Searching for Stars on an Island in Maine</em> (2018) — down to
-        the star, the planet, and the moon phase.
-      </p>
-      <p style={{ color: 'rgba(232, 236, 245, 0.85)' }}>
-        Positions are computed with astronomy-engine from the HYG star catalog, Stellarium&apos;s
-        constellation figures, and d3-celestial&apos;s Milky Way outline — the same math
-        underlying professional planetarium software, not an illustration.
-      </p>
-
-      <p style={{ color: 'rgba(232, 236, 245, 0.6)', fontSize: 12 }}>
-        Coordinates are a public-Casco-Bay proxy; Lightman does not disclose the exact
-        island.
+        A recreation of the night sky Dr. Alan Lightman describes from his island in
+        Casco Bay, Maine, in his book <em>Searching for Stars on an Island in Maine</em>{' '}
+        (2018). Along with basically every other night sky past and present, including
+        your birthday, from the island from Casco.
       </p>
 
       <p style={{ color: 'rgba(232, 236, 245, 0.5)', fontSize: 11, marginBottom: 4 }}>
@@ -106,7 +97,7 @@ export default function AboutPanel({ onClose }: AboutPanelProps) {
       </p>
 
       <p style={{ color: 'rgba(232, 236, 245, 0.4)', fontSize: 11, marginBottom: 0 }}>
-        Made by Adi Panday, 2026.
+        Made by Adidev Panday using Claude Code, 2026
       </p>
     </div>
   );

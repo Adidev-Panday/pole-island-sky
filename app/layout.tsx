@@ -16,7 +16,7 @@ const SITE_URL = "https://pole-island.adidevpanday.com";
 
 export const metadata: Metadata = {
   metadataBase: new URL(SITE_URL),
-  title: "Pole Island Sky, the night sky from Alan Lightman's island in Maine",
+  title: "Stars In Maine",
   description:
     "A recreation of the wee-hours summer sky from Casco Bay, Maine, as described in Alan Lightman's Searching for Stars on an Island in Maine (2018).",
   keywords: [
@@ -35,14 +35,14 @@ export const metadata: Metadata = {
     siteName: "Pole Island Sky",
     url: SITE_URL,
     locale: "en_US",
-    title: "Pole Island Sky, the night sky from Alan Lightman's island in Maine",
+    title: "Stars In Maine",
     description:
       "A recreation of the wee-hours summer sky from Casco Bay, Maine, as described in Alan Lightman's Searching for Stars on an Island in Maine (2018).",
   },
   twitter: {
     card: "summary_large_image",
     // creator: "" - add a handle here if/when one exists
-    title: "Pole Island Sky, the night sky from Alan Lightman's island in Maine",
+    title: "Stars In Maine",
     description:
       "A recreation of the wee-hours summer sky from Casco Bay, Maine, as described in Alan Lightman's Searching for Stars on an Island in Maine (2018).",
   },

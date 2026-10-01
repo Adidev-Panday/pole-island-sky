@@ -10,6 +10,7 @@ interface TopRightControlsProps {
 }
 
 const ICON_BUTTON_SIZE_PX = 32;
+const SIZE_OF_LIFE_URL = 'https://neal.fun/size-of-life/';
 
 export default function TopRightControls({ labelsEnabled, onToggleLabels }: TopRightControlsProps) {
   const [aboutOpen, setAboutOpen] = useState(false);
@@ -24,26 +25,67 @@ export default function TopRightControls({ labelsEnabled, onToggleLabels }: TopR
           right: 16,
           zIndex: 10,
           display: 'flex',
-          alignItems: 'center',
-          gap: isMobile ? 8 : 10,
+          flexDirection: 'column',
+          alignItems: 'flex-end',
+          gap: 8,
           fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
           fontSize: 12,
           color: 'rgba(232, 236, 245, 0.75)',
         }}
       >
-        {isMobile ? (
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: isMobile ? 8 : 10,
+          }}
+        >
+          {isMobile ? (
+            <button
+              onClick={() => onToggleLabels(!labelsEnabled)}
+              aria-label="Toggle labels"
+              aria-pressed={labelsEnabled}
+              style={{
+                width: ICON_BUTTON_SIZE_PX,
+                height: ICON_BUTTON_SIZE_PX,
+                borderRadius: 4,
+                border: '1px solid rgba(255, 255, 255, 0.14)',
+                background: labelsEnabled ? 'rgba(255, 255, 255, 0.16)' : 'rgba(255, 255, 255, 0.04)',
+                color: 'rgba(232, 236, 245, 0.9)',
+                fontSize: 13,
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                padding: 0,
+              }}
+            >
+              L
+            </button>
+          ) : (
+            <label style={{ display: 'flex', alignItems: 'center', gap: 5, cursor: 'pointer' }}>
+              <input
+                type="checkbox"
+                checked={labelsEnabled}
+                onChange={(e) => onToggleLabels(e.target.checked)}
+                style={{ cursor: 'pointer' }}
+              />
+              Labels
+            </label>
+          )}
+
           <button
-            onClick={() => onToggleLabels(!labelsEnabled)}
-            aria-label="Toggle labels"
-            aria-pressed={labelsEnabled}
+            onClick={() => setAboutOpen((v) => !v)}
+            aria-label="About"
             style={{
-              width: ICON_BUTTON_SIZE_PX,
-              height: ICON_BUTTON_SIZE_PX,
-              borderRadius: 4,
+              width: isMobile ? ICON_BUTTON_SIZE_PX : 20,
+              height: isMobile ? ICON_BUTTON_SIZE_PX : 20,
+              borderRadius: isMobile ? 4 : '50%',
               border: '1px solid rgba(255, 255, 255, 0.14)',
-              background: labelsEnabled ? 'rgba(255, 255, 255, 0.16)' : 'rgba(255, 255, 255, 0.04)',
-              color: 'rgba(232, 236, 245, 0.9)',
-              fontSize: 13,
+              background: 'rgba(255, 255, 255, 0.04)',
+              color: 'rgba(232, 236, 245, 0.75)',
+              fontSize: isMobile ? 16 : 12,
+              lineHeight: 1,
               cursor: 'pointer',
               display: 'flex',
               alignItems: 'center',
@@ -51,41 +93,32 @@ export default function TopRightControls({ labelsEnabled, onToggleLabels }: TopR
               padding: 0,
             }}
           >
-            L
+            &#9432;
           </button>
-        ) : (
-          <label style={{ display: 'flex', alignItems: 'center', gap: 5, cursor: 'pointer' }}>
-            <input
-              type="checkbox"
-              checked={labelsEnabled}
-              onChange={(e) => onToggleLabels(e.target.checked)}
-              style={{ cursor: 'pointer' }}
-            />
-            Labels
-          </label>
-        )}
+        </div>
 
-        <button
-          onClick={() => setAboutOpen((v) => !v)}
-          aria-label="About"
+        <a
+          href={SIZE_OF_LIFE_URL}
+          target="_blank"
+          rel="noopener noreferrer"
           style={{
-            width: isMobile ? ICON_BUTTON_SIZE_PX : 20,
-            height: isMobile ? ICON_BUTTON_SIZE_PX : 20,
-            borderRadius: isMobile ? 4 : '50%',
+            width: 90,
+            height: 28,
+            borderRadius: 4,
             border: '1px solid rgba(255, 255, 255, 0.14)',
             background: 'rgba(255, 255, 255, 0.04)',
             color: 'rgba(232, 236, 245, 0.75)',
-            fontSize: isMobile ? 16 : 12,
-            lineHeight: 1,
+            fontSize: 12,
+            textDecoration: 'none',
             cursor: 'pointer',
             display: 'flex',
             alignItems: 'center',
             justifyContent: 'center',
-            padding: 0,
+            textAlign: 'center',
           }}
         >
-          &#9432;
-        </button>
+          Size of Life
+        </a>
       </div>
 
       {aboutOpen && <AboutPanel onClose={() => setAboutOpen(false)} />}
